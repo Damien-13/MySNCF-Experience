@@ -18,11 +18,19 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Pour le développement : `pip install -r requirements-dev.txt`.
-
 ## Configuration
 
 Copier `.env.example` en `.env` puis renseigner les variables.
+
+## Extraction des données
+
+Déclarer chaque lien dans `.env` (`DATASET_<SOURCE>_URL=...`), puis :
+
+```bash
+python -c "from lib.downloader import download; download(['basilic'])"
+```
+
+Chaque lien est téléchargé dans `data/<source>/` (les `.zip` sont décompressés).
 
 ## Licence
 
