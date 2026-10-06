@@ -1,0 +1,39 @@
+# Dossier local de l'agent (roadmap, logs d'erreurs, bonnes pratiques)
+agent/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Variables d'environnement et secrets
+.env
+.env.*
+!.env.example
+
+# Données brutes volumineuses (garder .gitkeep)
+src/data/*
+!src/data/.gitkeep
+
+# Logs
+*.log
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
