@@ -7,7 +7,8 @@ Description du projet à compléter.
 ```
 src/        code source de l'application
 data/       données (non versionnées)
-lib/        bibliothèques et modules réutilisables
+lib/        bibliothèques et modules réutilisables (téléchargement, connexion et modèles de la base)
+bdd/        migrations de la base de données (Alembic)
 ```
 
 ## Installation
@@ -31,6 +32,18 @@ python -c "from lib.downloader import download; download(['basilic'])"
 ```
 
 Chaque lien est téléchargé dans `data/<source>/` (les `.zip` sont décompressés).
+
+## Base de données
+
+Les tables sont décrites dans `lib/modeles.py` (SQLAlchemy). L'URL de la base est `DATABASE_URL` dans `.env`
+(SQLite par défaut, PostgreSQL possible en changeant l'URL).
+
+```bash
+python src/migration.py                         # applique les migrations de bdd/versions/ jusqu'à la plus récente
+python src/migration.py --nouvelle "ajoute X"   # après avoir modifié lib/modeles.py : crée la migration suivante (002, 003…)
+```
+
+Une migration existante ne se modifie jamais : toute évolution du schéma est une nouvelle migration, à relire avant de l'appliquer.
 
 ## Licence
 
