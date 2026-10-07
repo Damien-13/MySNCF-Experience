@@ -2,3 +2,15 @@
 python-dotenv>=1.0
 requests>=2.31
 pytest
+
+# Analyse exploratoire (src/EDA)
+jupyter
+ipykernel
+pandas>=2.2
+numpy
+pyarrow
+matplotlib
+seaborn
+scipy
+scikit-learn
+networkx
