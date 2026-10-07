@@ -1,4 +1,4 @@
-"""Tables de la base (SQLAlchemy). Chaque évolution passe par une nouvelle migration dans bdd/versions/.
+"""Tables de la base (SQLAlchemy). Chaque évolution passe par une nouvelle migration dans migrations/versions/.
 
 Transport (GTFS, tous réseaux) : reseau → ligne → circulation → passage → arret.
 Emplacements : lieu (gare, arrêt de bus, station vélo, culture, tourisme…) ; gare et station_velo en précisent le type.

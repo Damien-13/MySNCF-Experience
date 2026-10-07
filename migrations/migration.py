@@ -1,8 +1,8 @@
-"""Migration de la base : applique les migrations de bdd/versions/ jusqu'à la plus récente.
+"""Migration de la base : applique les migrations de migrations/versions/ jusqu'à la plus récente.
 
 Usage :
-    python src/migration.py                          # met la base à jour (001, puis 002 si elle existe…)
-    python src/migration.py --nouvelle "ajoute X"    # crée la migration suivante (numéro = dernier + 1)
+    python migrations/migration.py                          # met la base à jour (001, puis 002 si elle existe…)
+    python migrations/migration.py --nouvelle "ajoute X"    # crée la migration suivante (numéro = dernier + 1)
 """
 import argparse
 import sys
@@ -16,12 +16,12 @@ from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 
-from lib.bdd import get_engine
+from lib.bdd.connexion import get_engine
 
 
 def _config():
     cfg = Config(str(ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(ROOT / "bdd"))
+    cfg.set_main_option("script_location", str(ROOT / "migrations"))
     return cfg
 
 
@@ -47,11 +47,11 @@ def nouvelle(message):
     versions = [int(r.revision) for r in ScriptDirectory.from_config(cfg).walk_revisions() if r.revision.isdigit()]
     numero = f"{max(versions, default=0) + 1:03d}"
     command.revision(cfg, message=message, autogenerate=True, rev_id=numero)
-    print(f"Migration {numero} créée dans bdd/versions/ : à relire avant de l'appliquer.")
+    print(f"Migration {numero} créée dans migrations/versions/ : à relire avant de l'appliquer.")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--nouvelle", metavar="MESSAGE", help="crée la prochaine migration d'après lib/modeles.py")
+    parser.add_argument("--nouvelle", metavar="MESSAGE", help="crée la prochaine migration d'après lib/bdd/modeles.py")
     args = parser.parse_args()
     nouvelle(args.nouvelle) if args.nouvelle else migrer()
