@@ -24,8 +24,8 @@ dist/
 !.env.example
 
 # Données brutes volumineuses (garder .gitkeep)
-src/data/*
-!src/data/.gitkeep
+data/*
+!data/.gitkeep
 
 # Logs
 *.log
