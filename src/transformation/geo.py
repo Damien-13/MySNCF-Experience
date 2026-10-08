@@ -1,5 +1,6 @@
 """Calculs géographiques communs aux étapes de la transformation."""
 import numpy as np
+import pandas as pd
 
 RAYON_TERRE_KM = 6371.0088
 PAQUET = 2_000        # lieux comparés à toutes les gares à la fois (borne la mémoire : PAQUET × nb de gares)
@@ -23,3 +24,28 @@ def plus_proche(lat, lon, cibles_lat, cibles_lon):
         indices[debut:fin] = proche
         distances[debut:fin] = 2 * RAYON_TERRE_KM * np.arcsin(np.sqrt(a[np.arange(len(proche)), proche]))
     return indices, distances
+
+
+def en_france_continentale(departements):
+    """Série de booléens : département renseigné et ni outre-mer (97x, 98x) ni Corse (2A, 2B, 20).
+    La Corse est écartée pour l'instant : aucune gare du fichier ne s'y trouve."""
+    dep = pd.Series(departements).fillna("").astype(str).str.strip().str.upper()
+    return dep.ne("") & ~dep.str.match(r"^(9[78]|2A|2B|20)")
+
+
+def departement_et_commune(code_postal_commune):
+    """DATAtourisme donne « 37250#Veigné » (parfois plusieurs, séparés par « | »). Retourne (departement, commune) du premier :
+    deux premiers chiffres du code postal, trois pour l'outre-mer (97x, 98x). Valeurs vides si le code n'est pas à 5 chiffres."""
+    premier = pd.Series(code_postal_commune).fillna("").astype(str).str.split("|").str[0]
+    parties = premier.str.split("#", n=1, expand=True).reindex(columns=[0, 1])
+    code = parties[0].str.strip()
+    code = code.where(code.str.fullmatch(r"\d{5}"), "")
+    departement = code.str[:2]
+    departement = departement.where(~departement.isin(["97", "98"]), code.str[:3])
+    return departement, parties[1].str.strip()
+
+
+def dans_la_france_continentale(lat, lon):
+    """Série de booléens : position dans le rectangle de la France continentale (écarte l'étranger et les positions aberrantes)."""
+    lat, lon = pd.Series(lat), pd.Series(lon)
+    return lat.between(41.3, 51.2) & lon.between(-5.3, 9.7)

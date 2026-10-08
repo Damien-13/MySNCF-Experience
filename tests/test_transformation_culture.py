@@ -31,12 +31,12 @@ def db(monkeypatch):
 
 
 BRUT = pd.DataFrame({
-    "Nom": ["Château A", "Château A", "Musée B", "Case créole", "", "Phare C", "Musée Lu Xun"],
-    "Adresse": ["r. 1", "r. 1", None, "r. 2", "r. 3", "quai", None],
-    "libelle_geographique": ["Blois", "Blois", "Lyon", "Saint-Denis", "X", "Ajaccio", "Shaoxing, Chine"],
-    "N_Département": ["41", "41", "69", "974", "01", "2A", None],
-    "Latitude": ["47.59", "47.59", "45.76", "-21.0", "46.0", "abc", "30.0"],
-    "Longitude": ["1.33", "1.33", "4.83", "55.4", "5.0", "8.7", "120.5"],
+    "Nom": ["Château A", "Château A", "Musée B", "Case créole", "", "Phare C", "Musée Lu Xun", "Citadelle"],
+    "Adresse": ["r. 1", "r. 1", None, "r. 2", "r. 3", "quai", None, "haut"],
+    "libelle_geographique": ["Blois", "Blois", "Lyon", "Saint-Denis", "X", "Ajaccio", "Shaoxing, Chine", "Bonifacio"],
+    "N_Département": ["41", "41", "69", "974", "01", "2A", None, "2B"],
+    "Latitude": ["47.59", "47.59", "45.76", "-21.0", "46.0", "abc", "30.0", "41.4"],
+    "Longitude": ["1.33", "1.33", "4.83", "55.4", "5.0", "8.7", "120.5", "9.1"],
 })
 
 
@@ -58,7 +58,7 @@ def test_plus_proche_par_paquets(monkeypatch):
 
 def test_nettoyer():
     out = culture.nettoyer(BRUT)
-    assert list(out["nom"]) == ["Château A", "Musée B"]       # doublon, outre-mer, étranger, sans nom et position invalide écartés
+    assert list(out["nom"]) == ["Château A", "Musée B"]       # doublon, outre-mer, Corse, étranger, sans nom et position invalide écartés
     assert list(out["departement"]) == ["41", "69"]
 
 
