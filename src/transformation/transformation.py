@@ -11,11 +11,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import culture
+import evenement
 import gare
+import tourisme
 
 ETAPES = [
     ("gares", gare),
     ("culture", culture),
+    ("tourisme", tourisme),
+    ("evenements", evenement),
 ]
 
 
