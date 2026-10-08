@@ -41,6 +41,20 @@ python src/initialize.py   # crée la base de données (SQLite par défaut), pui
 
 Relançable sans risque. Le téléchargement des données nécessaires reste à brancher (liste `SOURCES` dans `src/initialize.py`).
 
+## Transformation
+
+Nettoie les données de `data/` et les charge dans la base. Les flux temps réel (`FLUX_*`) n'y passent pas.
+
+```bash
+python src/transformation/transformation.py   # lance toutes les étapes dans l'ordre
+```
+
+Une étape par domaine, dans `src/transformation/` (nettoyage, transformation et chargement). Pour l'instant : `gare.py`
+(gares_voyageurs + horaires_gares → tables `lieu`, `gare`, `gare_horaire`). Pour ajouter un domaine : créer son module
+avec une fonction `transformer()`, puis l'ajouter à `ETAPES` dans `transformation.py`.
+
+Relançable sans risque : les données de chaque source sont remplacées à chaque passage.
+
 ## Base de données
 
 Les tables sont décrites dans `lib/db/models.py` (SQLAlchemy). L'URL de la base est `DATABASE_URL` dans `.env`
