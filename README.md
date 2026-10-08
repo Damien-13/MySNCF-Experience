@@ -55,6 +55,19 @@ stations, erreurs = lire_tous()   # une ligne par station : flux, station_id, no
 
 Un flux en panne apparaît dans `erreurs` sans bloquer les autres. Pour ajouter une ville : ajouter son `FLUX_<NOM>_URL` au `.env`.
 
+## API SNCF
+
+`lib/navitia.py` interroge l'API SNCF (Navitia, couverture `sncf`) pour chercher une gare et calculer des itinéraires en train, avec
+les émissions de CO₂. Le token est `NAVITIA_TOKEN` dans le `.env`. Comme les flux, c'est le dashboard qui l'appelle : rien n'est stocké.
+La couverture ne va qu'environ 30 jours en avant.
+
+```python
+from lib.navitia import id_gare, itineraires
+itineraires(id_gare("87547000"), id_gare("87574004"), quand="2026-10-12 08:00")   # Paris Austerlitz → Blois-Chambord
+```
+
+`id_gare(code_uic)` convertit le `code_uic` d'une gare de la base en identifiant Navitia.
+
 ## Transformation
 
 Nettoie les données de `data/` et les charge dans la base. Les flux temps réel (`FLUX_*`) n'y passent pas.
