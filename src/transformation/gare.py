@@ -1,7 +1,7 @@
 """Transformation des gares : nettoie gares_voyageurs et horaires_gares, puis remplit lieu, gare et gare_horaire.
 
 Usage : python src/transformation/gare.py
-Relançable sans risque : les gares de la source sont remplacées (tout passe ou rien).
+Relançable sans risque : les gares de la source sont mises à jour (tout passe ou rien), en gardant l'identifiant des gares déjà connues.
 
 Nettoyage :
 - Position « lat, lon » (texte) → deux nombres.
@@ -84,22 +84,33 @@ def associer_horaires(gares, horaires):
 
 
 def charger(gares, horaires, engine=None):
-    """Remplace en une transaction les gares de la source (lieu, gare, gare_horaire). Retourne (nb gares, nb plages)."""
+    """Met à jour en une transaction les gares de la source (lieu, gare, gare_horaire). Retourne (nb gares, nb plages).
+    Une gare déjà en base (même code UIC) garde son identifiant : tout ce qui s'y rattache (gare_proche_id des lieux, arrêts) reste valable.
+    Les gares qui ne sont plus dans la source sont supprimées ; les horaires sont remplacés en entier."""
     engine = engine or get_engine()
     with engine.begin() as conn:
-        anciens = sa.select(Lieu.id).where(Lieu.type == "gare", Lieu.source == SOURCE)
-        conn.execute(sa.delete(GareHoraire).where(GareHoraire.gare_id.in_(anciens)))
-        conn.execute(sa.delete(Gare).where(Gare.lieu_id.in_(anciens)))
-        conn.execute(sa.delete(Lieu).where(Lieu.type == "gare", Lieu.source == SOURCE))
+        des_gares = sa.select(Lieu.id).where(Lieu.type == "gare", Lieu.source == SOURCE)
+        anciennes = dict(conn.execute(sa.select(Gare.code_uic, Gare.lieu_id).where(Gare.lieu_id.in_(des_gares))).all())
+        conn.execute(sa.delete(GareHoraire).where(GareHoraire.gare_id.in_(des_gares)))
 
-        depart = (conn.scalar(sa.select(sa.func.max(Lieu.id))) or 0) + 1
-        ids = {code: depart + i for i, code in enumerate(gares["code_uic"])}
-        conn.execute(sa.insert(Lieu), [
-            {"id": ids[g.code_uic], "type": "gare", "source": SOURCE, "nom": g.nom,
-             "lat": g.lat, "lon": g.lon, "departement": g.departement}
-            for g in gares.itertuples()
-        ])
-        conn.execute(sa.insert(Gare), [{"lieu_id": ids[c], "code_uic": c} for c in gares["code_uic"]])
+        prochain = (conn.scalar(sa.select(sa.func.max(Lieu.id))) or 0) + 1
+        ids, nouvelles = {}, []
+        for g in gares.itertuples():
+            if g.code_uic in anciennes:
+                ids[g.code_uic] = anciennes[g.code_uic]
+                conn.execute(sa.update(Lieu).where(Lieu.id == ids[g.code_uic]).values(nom=g.nom, lat=g.lat, lon=g.lon, departement=g.departement))
+            else:
+                ids[g.code_uic] = prochain + len(nouvelles)
+                nouvelles.append(g)
+        disparues = [lieu_id for code, lieu_id in anciennes.items() if code not in ids]
+        if disparues:
+            conn.execute(sa.delete(Gare).where(Gare.lieu_id.in_(disparues)))
+            conn.execute(sa.delete(Lieu).where(Lieu.id.in_(disparues)))
+        if nouvelles:
+            conn.execute(sa.insert(Lieu), [
+                {"id": ids[g.code_uic], "type": "gare", "source": SOURCE, "nom": g.nom, "lat": g.lat, "lon": g.lon, "departement": g.departement}
+                for g in nouvelles])
+            conn.execute(sa.insert(Gare), [{"lieu_id": ids[g.code_uic], "code_uic": g.code_uic} for g in nouvelles])
         plages = [
             {"gare_id": ids[h.code_uic], "jour": h.jour,
              "heure_ouverture": h.heure_ouverture, "heure_fermeture": h.heure_fermeture}
