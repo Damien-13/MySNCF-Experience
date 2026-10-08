@@ -43,6 +43,18 @@ Relançable sans risque : la base déjà à jour n'est pas modifiée, les source
 retéléchargées, et la transformation remplace les données de chaque source (environ 2 min 30 pour tout recharger).
 Les sources à télécharger sont la liste `SOURCES` de `src/initialize.py` ; chacune doit avoir son `DATASET_<SOURCE>_URL` dans le `.env`.
 
+## Flux temps réel
+
+`lib/flux.py` lit les stations de vélos en libre-service déclarées en `FLUX_<NOM>_URL` dans le `.env` (GBFS v2 et v3). C'est le dashboard
+qui l'appelle à chaque actualisation : rien n'est stocké en base, et la transformation n'y touche pas.
+
+```python
+from lib.flux import lire, lire_tous
+stations, erreurs = lire_tous()   # une ligne par station : flux, station_id, nom, lat, lon, capacite, velos_disponibles, places_disponibles, en_service, mis_a_jour
+```
+
+Un flux en panne apparaît dans `erreurs` sans bloquer les autres. Pour ajouter une ville : ajouter son `FLUX_<NOM>_URL` au `.env`.
+
 ## Transformation
 
 Nettoie les données de `data/` et les charge dans la base. Les flux temps réel (`FLUX_*`) n'y passent pas.
