@@ -15,11 +15,15 @@ import evenement
 import gare
 import sncf
 import tourisme
+import trains_europeens
+import transilien
 import velo
 
 ETAPES = [
     ("gares", gare),
     ("sncf", sncf),
+    ("transilien", transilien),
+    ("trains européens", trains_europeens),
     ("culture", culture),
     ("tourisme", tourisme),
     ("evenements", evenement),

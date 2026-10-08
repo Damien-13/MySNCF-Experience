@@ -24,7 +24,7 @@ from lib.downloader import download
 DATA = ROOT / "data"
 SOURCES = ["gares_voyageurs", "horaires_gares", "basilic", "datatourisme_place", "datatourisme_fma",
            "velo_stationnement_osm", "velo_stationnement_gares_centre_val_de_loire", "vls_paris_velib", "vls_lyon_velov",
-           "horaires_sncf_gtfs"]
+           "horaires_sncf_gtfs", "transilien", "eurostar", "renfe_ave", "trenitalia_france"]
 
 
 def create_database():
