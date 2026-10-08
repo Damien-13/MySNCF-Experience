@@ -33,6 +33,14 @@ python -c "from lib.downloader import download; download(['basilic'])"
 
 Chaque lien est téléchargé dans `data/<source>/` (les `.zip` sont décompressés).
 
+## Initialisation
+
+```bash
+python src/initialize.py   # crée la base de données (SQLite par défaut), puis télécharge les données nécessaires
+```
+
+Relançable sans risque. Le téléchargement des données nécessaires reste à brancher (liste `SOURCES` dans `src/initialize.py`).
+
 ## Base de données
 
 Les tables sont décrites dans `lib/db/models.py` (SQLAlchemy). L'URL de la base est `DATABASE_URL` dans `.env`
