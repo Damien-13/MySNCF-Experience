@@ -45,6 +45,34 @@ python migrations/migration.py --new "ajoute X"   # après avoir modifié lib/db
 
 Une migration existante ne se modifie jamais : toute évolution du schéma est une nouvelle migration, à relire avant de l'appliquer.
 
+## Schéma macro de la base de données
+
+```text
+  TRANSPORT                                    EMPLACEMENTS
+  ┌─────────┐                                  ┌────────────────────────┐
+  │ reseau  │                                  │         lieu           │
+  └────┬────┘                                  │ type : gare, arret_bus,│
+       │ 1-n                                   │ station_velo, culture… │
+  ┌────┴────┐                                  │ lat, lon, adresse      │
+  │ ligne   │                                  │ gare_proche → lieu     │
+  └────┬────┘                                  │ distance_gare_km       │
+       │ 1-n                                   └──┬──────┬──────┬───────┘
+  ┌────┴────────┐   ┌────────────┐                │      │      │
+  │ circulation ├───┤ calendrier │      ┌─────────┘      │      └──────────┐
+  └────┬────────┘   └────────────┘      │ 1-1            │ 1-1             │ n-n
+       │ 1-n                       ┌────┴────┐   ┌───────┴──────┐  ┌───────┴────────┐
+  ┌────┴────┐      ┌───────┐  n-1  │  gare   │   │ station_velo │  │ evenement_lieu │
+  │ passage ├─n-1──┤ arret ├──────►│ (lieu)  │   └──────────────┘  └───────┬────────┘
+  └─────────┘      └───────┘       └────┬────┘                             │ n-1
+                    un arrêt GTFS       │ 1-n                       ┌──────┴─────┐
+                    pointe vers         ┌┴─────────────┐            │ evenement  │
+                    son lieu            │ gare_horaire │            └──────┬─────┘
+                                        └──────────────┘                   │ 1-n
+                                                               ┌───────────┴───────┐
+                                                               │ evenement_periode │
+                                                               └───────────────────┘
+```
+
 ## Licence
 
 Voir [LICENSE](LICENSE).
