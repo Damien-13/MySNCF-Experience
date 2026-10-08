@@ -6,7 +6,7 @@ Emplacements : lieu (gare, arrêt de bus, station vélo, culture, tourisme…) ;
 Identifiants GTFS préfixés par le réseau (« sncf:… ») pour rester uniques entre réseaux.
 Heures de passage en secondes depuis minuit (peuvent dépasser 86400 pour les trains de nuit).
 """
-from datetime import date, time
+import datetime as dt
 
 from sqlalchemy import Date, Float, ForeignKey, Integer, String, Time
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -50,7 +50,7 @@ class Calendrier(Base):
     """Un jour où roule un service. service_id n'est pas unique ici : pas de clé étrangère depuis circulation."""
     __tablename__ = "calendrier"
     service_id: Mapped[str] = mapped_column(String, primary_key=True)
-    date: Mapped[date] = mapped_column(Date, primary_key=True, index=True)
+    date: Mapped[dt.date] = mapped_column(Date, primary_key=True, index=True)
 
 
 class Passage(Base):
@@ -92,8 +92,8 @@ class GareHoraire(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     gare_id: Mapped[int] = mapped_column(ForeignKey("gare.lieu_id"), index=True)
     jour: Mapped[int] = mapped_column(Integer)
-    heure_ouverture: Mapped[time | None] = mapped_column(Time)
-    heure_fermeture: Mapped[time | None] = mapped_column(Time)
+    heure_ouverture: Mapped[dt.time | None] = mapped_column(Time)
+    heure_fermeture: Mapped[dt.time | None] = mapped_column(Time)
 
 
 class Arret(Base):
@@ -133,5 +133,5 @@ class EvenementPeriode(Base):
     __tablename__ = "evenement_periode"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     evenement_id: Mapped[int] = mapped_column(ForeignKey("evenement.id"), index=True)
-    date_debut: Mapped[date] = mapped_column(Date, index=True)
-    date_fin: Mapped[date] = mapped_column(Date)
+    date_debut: Mapped[dt.date] = mapped_column(Date, index=True)
+    date_fin: Mapped[dt.date] = mapped_column(Date)
