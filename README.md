@@ -36,10 +36,12 @@ Chaque lien est téléchargé dans `data/<source>/` (les `.zip` sont décompress
 ## Initialisation
 
 ```bash
-python src/initialize.py   # crée la base de données (SQLite par défaut), puis télécharge les données nécessaires
+python src/initialize.py   # crée la base (SQLite par défaut), télécharge les sources, puis les nettoie et les charge
 ```
 
-Relançable sans risque. Le téléchargement des données nécessaires reste à brancher (liste `SOURCES` dans `src/initialize.py`).
+Relançable sans risque : la base déjà à jour n'est pas modifiée, les sources déjà présentes dans `data/<source>/` ne sont pas
+retéléchargées, et la transformation remplace les données de chaque source (environ 2 min 30 pour tout recharger).
+Les sources à télécharger sont la liste `SOURCES` de `src/initialize.py` ; chacune doit avoir son `DATASET_<SOURCE>_URL` dans le `.env`.
 
 ## Transformation
 
