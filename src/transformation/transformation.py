@@ -14,12 +14,14 @@ import culture
 import evenement
 import gare
 import tourisme
+import velo
 
 ETAPES = [
     ("gares", gare),
     ("culture", culture),
     ("tourisme", tourisme),
     ("evenements", evenement),
+    ("velo", velo),
 ]
 
 

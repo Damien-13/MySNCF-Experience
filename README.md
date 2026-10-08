@@ -68,6 +68,7 @@ Une étape par domaine, dans `src/transformation/` (nettoyage, transformation et
 - `culture.py` : basilic → `lieu` (culture), avec la gare la plus proche
 - `tourisme.py` : datatourisme_place (attractions seulement) → `lieu` (tourisme), avec la gare la plus proche
 - `evenement.py` : datatourisme_fma → `evenement`, `evenement_lieu`, `evenement_periode`, `lieu` (evenement)
+- `velo.py` : stationnement cyclable (OpenStreetMap, gares du Centre-Val de Loire), Vélib', Vélo'v → `lieu` (station_velo), `station_velo`
 
 La Corse et l'outre-mer sont écartés pour l'instant. Pour ajouter un domaine : créer son module
 avec une fonction `transformer()`, puis l'ajouter à `ETAPES` dans `transformation.py`.
