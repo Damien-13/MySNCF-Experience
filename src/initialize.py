@@ -24,7 +24,7 @@ from lib.downloader import download
 DATA = ROOT / "data"
 SOURCES = ["gares_voyageurs", "horaires_gares", "basilic", "datatourisme_place", "datatourisme_fma",
            "velo_stationnement_osm", "velo_stationnement_gares_centre_val_de_loire", "vls_paris_velib", "vls_lyon_velov",
-           "horaires_sncf_gtfs", "transilien", "eurostar", "renfe_ave", "trenitalia_france",
+           "horaires_sncf_gtfs", "transilien", "eurostar", "renfe_ave", "trenitalia_france", "idfm",
            *sorted(f"bus_{r}" for r in ["marseille_amp", "toulouse_tisseo", "bordeaux_tbm", "nantes_naolib", "strasbourg_cts", "rennes_star", "lille_ilevia", "nice_lignes_dazur", "rouen_astuce", "toulon_mistral", "angers_irigo", "tours_fil_bleu", "orleans_tao", "dijon_divia", "brest_bibus", "besancon_ginko", "metz_le_met", "reims_grand_reims", "saint_etienne_stas", "montpellier_tam"])]
 
 

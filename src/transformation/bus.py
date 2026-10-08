@@ -1,13 +1,15 @@
-"""Transformation des réseaux urbains (bus, tram, métro, bateau…) de 20 agglomérations : GTFS vers reseau, ligne, circulation,
+"""Transformation des réseaux urbains (bus, tram, métro, bateau…) de 20 agglomérations et d'Île-de-France : GTFS vers reseau, ligne, circulation,
 calendrier, arret et passage. Outils communs : gtfs.py.
 
 Usage : python src/transformation/bus.py   (les gares doivent déjà être chargées : voir transformation.py)
-Relançable sans risque : chaque réseau est remplacé en entier (tout passe ou rien). Environ 25 millions de passages au total.
+Relançable sans risque : chaque réseau est remplacé en entier (tout passe ou rien). Environ 40 millions de passages au total.
 
 Chaque arrêt a son propre lieu (type « arret_bus », quel que soit le mode) avec sa gare la plus proche si elle est à moins de 50 km.
 Il n'est jamais rattaché à une gare : un arrêt « Gare SNCF » d'un réseau urbain est un autre objet que la gare.
 Chevauchement avec le GTFS SNCF : aucun risque, aucun de ces fichiers ne contient d'agence SNCF ; les cars TER restent dans sncf.py.
-Île-de-France (métro, tram, bus d'IDFM) : pas encore traité.
+Île-de-France Mobilités (« idfm ») : le fichier contient aussi les RER, Transilien et TER, tous déjà dans transilien.py (ses 50 292 circulations
+et ses 36 lignes y sont identiques). Règle de gestion : seules les lignes qui ne sont pas des trains (route_type 2) sont gardées ici, soit
+le métro, le tramway, le bus, le téléphérique et le funiculaire.
 """
 import sys
 from pathlib import Path
@@ -41,7 +43,10 @@ RESEAUX = {
     "bus_reims_grand_reims": ("reims_grand_reims", "Grand Reims Mobilités"),
     "bus_saint_etienne_stas": ("saint_etienne_stas", "STAS (Saint-Étienne)"),
     "bus_montpellier_tam": ("montpellier_tam", "TaM (Montpellier)"),
+    "idfm": ("idfm", "Île-de-France Mobilités (métro, tram, bus)"),
 }
+# lignes à garder par réseau, quand ce n'est pas toutes : d'après le DataFrame des lignes, une Series de booléens
+LIGNES_GARDEES = {"idfm": lambda routes: routes["route_type"] != "2"}
 # route_type GTFS de base ; les types étendus (700 = bus, 900 = tramway…) sont ramenés à leur famille (centaine)
 TYPES = {0: "Tramway", 1: "Métro", 2: "Train", 3: "Bus", 4: "Bateau", 5: "Tramway à câble", 6: "Téléphérique", 7: "Funiculaire", 11: "Trolleybus", 12: "Monorail"}
 FAMILLES = {1: "Train", 2: "Car", 4: "Métro", 7: "Bus", 8: "Trolleybus", 9: "Tramway", 10: "Bateau", 12: "Bateau", 13: "Téléphérique", 14: "Funiculaire", 15: "Taxi"}
@@ -62,16 +67,19 @@ def nettoyer(brut, reseau_id):
     return gtfs.normaliser(brut, reseau_id, types_lignes=types)
 
 
-def transformer():
+def transformer(dossiers=None):
+    """Charge les réseaux de RESEAUX, ou seulement ceux de `dossiers`."""
     if lire_gares().empty:
         sys.exit("Aucune gare en base : lancer d'abord l'étape gares (python src/transformation/transformation.py)")
     total = [0, 0, 0, 0]
     for dossier, (reseau_id, nom) in RESEAUX.items():
-        frames = nettoyer(gtfs.lire(ROOT / "data" / dossier), reseau_id)
+        if dossiers is not None and dossier not in dossiers:
+            continue
+        frames = nettoyer(gtfs.lire(ROOT / "data" / dossier, lignes=LIGNES_GARDEES.get(dossier)), reseau_id)
         nombres = gtfs.charger(frames, {"id": reseau_id, "nom": nom, "mode": "bus"}, dossier, type_lieu="arret_bus")
         total = [t + n for t, n in zip(total, nombres)]
         print(f"{nom} : {nombres[0]} lignes, {nombres[1]} circulations, {nombres[2]} arrêts, {nombres[3]} passages", flush=True)
-    print(f"Bus : {len(RESEAUX)} réseaux, {total[0]} lignes, {total[1]} circulations, {total[2]} arrêts, {total[3]} passages")
+    print(f"Bus : {len(RESEAUX) if dossiers is None else len(dossiers)} réseaux, {total[0]} lignes, {total[1]} circulations, {total[2]} arrêts, {total[3]} passages")
     return total
 
 

@@ -87,8 +87,10 @@ Une étape par domaine, dans `src/transformation/` (nettoyage, transformation et
   la source des TER (40 % de ces circulations s'y trouvaient déjà). Arrêts rattachés à la gare de la base la plus proche à moins de 300 m
   dont le nom est compatible, ou à moins de 50 m.
 - `trains_europeens.py` : Eurostar (rattaché par code UIC), Renfe AVE et Trenitalia France (rattachés par position) → mêmes tables.
-- `bus.py` : 20 réseaux urbains (bus, tram, métro, bateau…) → mêmes tables. Chaque arrêt a son lieu `arret_bus` avec sa gare la plus proche
-  (jamais rattaché à une gare). Environ 27 millions de passages : la base fait alors environ 6,5 Go et le chargement prend plusieurs minutes.
+- `bus.py` : 20 réseaux urbains (bus, tram, métro, bateau…) et Île-de-France Mobilités → mêmes tables. Chaque arrêt a son lieu `arret_bus` avec sa
+  gare la plus proche (jamais rattaché à une gare). Pour l'Île-de-France, seules les lignes qui ne sont pas des trains sont gardées : les RER,
+  Transilien et TER du même fichier sont déjà dans `transilien.py`. Environ 40 millions de passages : la base fait alors environ 9 Go et le
+  chargement complet prend plusieurs dizaines de minutes.
 - `evenement.py` : datatourisme_fma → `evenement`, `evenement_lieu`, `evenement_periode`, `lieu` (evenement)
 - `velo.py` : stationnement cyclable (OpenStreetMap, gares du Centre-Val de Loire), Vélib', Vélo'v → `lieu` (station_velo), `station_velo`
   Les parkings OpenStreetMap à moins de 25 m d'un parking du fichier de la région sont écartés (mêmes parkings, la région prime) : voir l'en-tête de `velo.py`.

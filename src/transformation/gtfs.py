@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import numpy as np
 import pandas as pd
 import sqlalchemy as sa
+from pandas.api.types import union_categoricals
 from scipy.spatial import cKDTree
 
 from lib.db.connection import get_engine
@@ -28,10 +29,11 @@ from lib.db.models import Arret, Calendrier, Circulation, Gare, Ligne, Lieu, Pas
 from lieux import inserer, lignes_lieu, lire_gares, rattacher_aux_gares
 
 DISTANCE_GARE_MAX_KM = 50          # au-delà, un arrêt n'a pas de gare « proche » (arrêts à l'étranger)
+PAQUET_LECTURE = 1_000_000          # lignes de stop_times lues à la fois
 PAQUET_TRANCHE = 100_000            # lignes converties et insérées à la fois
 DISTANCE_SANS_NOM_M = 50          # sans nom compatible, un arrêt n'est rattaché à une gare que si elle est à moins de cette distance
 MOTS_BANALS = {"gare", "saint", "sainte", "les", "des", "aeroport", "paris", "sncf", "rer"}
-FICHIERS = ["routes", "trips", "stop_times", "stops"]
+FICHIERS = ["routes", "trips", "stops"]
 FICHIERS_FACULTATIFS = ["calendar", "calendar_dates"]      # selon les réseaux : jours par semaine, jours ajoutés ou retirés, ou les deux
 JOURS_SEMAINE = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
@@ -43,12 +45,42 @@ def _csv(fichier):
     return df.apply(lambda colonne: colonne.str.strip())
 
 
-def lire(dossier):
-    """Les fichiers du GTFS en texte (les identifiants gardent leurs zéros). Retourne {nom: DataFrame} ; un fichier facultatif absent est vide."""
+def lire_passages(fichier, circulations=None):
+    """stop_times.txt sous forme compacte : trip_id et stop_id en catégories, rang en entier, heures en secondes.
+    Lu par paquets pour ne garder que les 5 colonnes utiles et, si `circulations` est donné, que celles-ci : un gros réseau
+    (plus de 10 millions de passages) ne tient pas en mémoire en texte."""
+    morceaux = []
+    colonnes = ["trip_id", "arrival_time", "departure_time", "stop_id", "stop_sequence"]
+    for paquet in pd.read_csv(fichier, dtype=str, usecols=colonnes, chunksize=PAQUET_LECTURE, skipinitialspace=True):
+        paquet.columns = paquet.columns.str.strip()
+        if circulations is not None:
+            paquet = paquet[paquet["trip_id"].isin(circulations)]
+        morceaux.append(pd.DataFrame({
+            "trip_id": paquet["trip_id"].astype("category"), "stop_id": paquet["stop_id"].astype("category"),
+            "stop_sequence": pd.to_numeric(paquet["stop_sequence"], errors="coerce"),
+            "heure_arrivee": en_secondes(paquet["arrival_time"]).astype("float32"),
+            "heure_depart": en_secondes(paquet["departure_time"]).astype("float32"),
+        }))
+    if not morceaux:
+        return pd.DataFrame({"trip_id": pd.Series(dtype="category"), "stop_id": pd.Series(dtype="category"), "stop_sequence": [],
+                             "heure_arrivee": [], "heure_depart": []})
+    tout = pd.concat([m.drop(columns=["trip_id", "stop_id"]) for m in morceaux], ignore_index=True)
+    for colonne in ("trip_id", "stop_id"):
+        tout[colonne] = pd.Series(union_categoricals([m[colonne].array for m in morceaux]))
+    return tout
+
+
+def lire(dossier, lignes=None):
+    """Les fichiers du GTFS (les identifiants gardent leurs zéros). Retourne {nom: DataFrame} ; un fichier facultatif absent est vide.
+    `lignes` : fonction qui, d'après le DataFrame des lignes, dit lesquelles garder (Series de booléens) ; les autres sont lues le moins possible."""
     brut = {nom: _csv(Path(dossier) / f"{nom}.txt") for nom in FICHIERS}
     for nom in FICHIERS_FACULTATIFS:
         fichier = Path(dossier) / f"{nom}.txt"
         brut[nom] = _csv(fichier) if fichier.is_file() else pd.DataFrame()
+    if lignes is not None:
+        brut["routes"] = brut["routes"][lignes(brut["routes"])]
+        brut["trips"] = brut["trips"][brut["trips"]["route_id"].isin(brut["routes"]["route_id"])]
+    brut["stop_times"] = lire_passages(Path(dossier) / "stop_times.txt", set(brut["trips"]["trip_id"]) if lignes is not None else None)
     return brut
 
 
@@ -125,10 +157,18 @@ def normaliser(brut, reseau_id, uic=None, libelles=None, types_lignes=None):
     calendrier = pd.DataFrame({"service_id": p + jours["service_id"], "date": jours["date"].dt.date})
     calendrier = calendrier[calendrier["service_id"].isin(p + trips["service_id"])].drop_duplicates()
     st = brut["stop_times"]
-    passages = pd.DataFrame({
-        "circulation_id": p + st["trip_id"], "ordre": st["stop_sequence"].astype(int), "arret_id": p + st["stop_id"],
-        "heure_arrivee": en_secondes(st["arrival_time"]), "heure_depart": en_secondes(st["departure_time"]),
-    })
+    if "heure_arrivee" in st:                                                   # format compact de lire() : heures déjà en secondes
+        passages = pd.DataFrame({
+            "circulation_id": st["trip_id"].cat.rename_categories(lambda c: p + c), "ordre": st["stop_sequence"],
+            "arret_id": st["stop_id"].cat.rename_categories(lambda c: p + c),
+            "heure_arrivee": st["heure_arrivee"], "heure_depart": st["heure_depart"],
+        })
+    else:
+        passages = pd.DataFrame({
+            "circulation_id": p + st["trip_id"], "ordre": st["stop_sequence"].astype(int), "arret_id": p + st["stop_id"],
+            "heure_arrivee": en_secondes(st["arrival_time"]), "heure_depart": en_secondes(st["departure_time"]),
+        })
+    passages = passages.dropna(subset=["ordre"])
     arrets = pd.DataFrame({
         "id": p + stops["stop_id"], "reseau_id": reseau_id, "nom": stops["stop_name"],
         "lat": pd.to_numeric(stops["stop_lat"], errors="coerce"), "lon": pd.to_numeric(stops["stop_lon"], errors="coerce"),

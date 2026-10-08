@@ -69,3 +69,43 @@ def test_charger_cree_des_arrets_bus_sans_les_rattacher_aux_gares(db):
         assert nord.gare_proche_id == 1 and 0 < nord.distance_gare_km < 1
         assert s.scalar(select(func.count()).select_from(Lieu).where(Lieu.type == "arret_bus")) == 2
         assert s.scalar(select(func.count()).select_from(Passage)) == 4 and s.scalar(select(func.count()).select_from(Ligne)) == 2
+
+
+def test_lire_passages_en_plusieurs_paquets(tmp_path, monkeypatch):
+    monkeypatch.setattr(gtfs, "PAQUET_LECTURE", 2)                                    # force plusieurs paquets, aux catégories différentes
+    fichier = tmp_path / "stop_times.txt"
+    pd.DataFrame({"trip_id": ["a", "a", "b", "b", "c"], "arrival_time": ["08:00:00", "08:10:00", "25:00:00", "25:05:00", "09:00:00"],
+                  "departure_time": ["08:00:30", "08:10:00", "25:00:00", "25:05:30", "09:00:00"], "stop_id": ["s1", "s2", "s3", "s1", "s2"],
+                  "stop_sequence": ["1", "2", "1", "2", "1"], "colonne_inutile": ["x"] * 5}).to_csv(fichier, index=False)
+    tout = gtfs.lire_passages(fichier)
+    assert list(tout["trip_id"]) == ["a", "a", "b", "b", "c"] and list(tout["stop_id"]) == ["s1", "s2", "s3", "s1", "s2"]
+    assert list(tout["heure_arrivee"]) == [28800, 29400, 90000, 90300, 32400] and "colonne_inutile" not in tout
+    assert list(gtfs.lire_passages(fichier, {"b"})["trip_id"]) == ["b", "b"]          # seules les circulations demandées
+
+
+def test_format_compact_et_texte_donnent_les_memes_passages(tmp_path):
+    dossier = tmp_path / "gtfs"
+    dossier.mkdir()
+    for nom in ("routes", "trips", "stops"):
+        BRUT[nom].to_csv(dossier / f"{nom}.txt", index=False)
+    BRUT["stop_times"].to_csv(dossier / "stop_times.txt", index=False)
+    BRUT["calendar"].to_csv(dossier / "calendar.txt", index=False)
+    compact = bus.nettoyer(gtfs.lire(dossier), "nantes")
+    texte = bus.nettoyer({k: v.copy() for k, v in BRUT.items()}, "nantes")
+    cols = ["circulation_id", "ordre", "arret_id", "heure_arrivee", "heure_depart"]
+    a = compact["passages"][cols].astype({"circulation_id": str, "arret_id": str}).reset_index(drop=True)
+    b = texte["passages"][cols].reset_index(drop=True).astype({"ordre": a["ordre"].dtype, "heure_arrivee": float, "heure_depart": float})
+    pd.testing.assert_frame_equal(a.astype({"heure_arrivee": float, "heure_depart": float}), b, check_dtype=False)
+
+
+def test_idfm_ecarte_les_trains(tmp_path):
+    dossier = tmp_path / "gtfs"
+    dossier.mkdir()
+    pd.DataFrame({"route_id": ["M1", "RERA", "B1"], "route_type": ["1", "2", "3"]}).to_csv(dossier / "routes.txt", index=False)
+    pd.DataFrame({"route_id": ["M1", "RERA", "B1"], "service_id": ["S"] * 3, "trip_id": ["m", "r", "b"]}).to_csv(dossier / "trips.txt", index=False)
+    pd.DataFrame({"stop_id": ["s"], "stop_lat": ["48.8"], "stop_lon": ["2.3"]}).to_csv(dossier / "stops.txt", index=False)
+    pd.DataFrame({"trip_id": ["m", "r", "b"], "arrival_time": ["08:00:00"] * 3, "departure_time": ["08:00:00"] * 3, "stop_id": ["s"] * 3,
+                  "stop_sequence": ["1"] * 3}).to_csv(dossier / "stop_times.txt", index=False)
+    brut = gtfs.lire(dossier, lignes=bus.LIGNES_GARDEES["idfm"])
+    assert sorted(brut["routes"]["route_id"]) == ["B1", "M1"] and sorted(brut["trips"]["trip_id"]) == ["b", "m"]
+    assert sorted(brut["stop_times"]["trip_id"]) == ["b", "m"]                         # les passages du RER ne sont même pas lus
