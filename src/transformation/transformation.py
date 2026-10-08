@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import bus
 import culture
 import evenement
 import gare
@@ -28,6 +29,7 @@ ETAPES = [
     ("tourisme", tourisme),
     ("evenements", evenement),
     ("velo", velo),
+    ("bus", bus),
 ]
 
 

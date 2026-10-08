@@ -76,7 +76,7 @@ def test_initialize_loads_the_data_after_the_download(db_path, monkeypatch):
 def test_every_listed_source_is_read_by_the_transformation():
     assert set(initialize.SOURCES) == {"gares_voyageurs", "horaires_gares", "basilic", "datatourisme_place", "datatourisme_fma",
                                     "velo_stationnement_osm", "velo_stationnement_gares_centre_val_de_loire", "vls_paris_velib", "vls_lyon_velov",
-                                    "horaires_sncf_gtfs", "transilien", "eurostar", "renfe_ave", "trenitalia_france"}
+                                    "horaires_sncf_gtfs", "transilien", "eurostar", "renfe_ave", "trenitalia_france"} | {"bus_marseille_amp", "bus_toulouse_tisseo", "bus_bordeaux_tbm", "bus_nantes_naolib", "bus_strasbourg_cts", "bus_rennes_star", "bus_lille_ilevia", "bus_nice_lignes_dazur", "bus_rouen_astuce", "bus_toulon_mistral", "bus_angers_irigo", "bus_tours_fil_bleu", "bus_orleans_tao", "bus_dijon_divia", "bus_brest_bibus", "bus_besancon_ginko", "bus_metz_le_met", "bus_reims_grand_reims", "bus_saint_etienne_stas", "bus_montpellier_tam"}
 
 
 def test_initialize_rejects_source_without_url(db_path, monkeypatch):

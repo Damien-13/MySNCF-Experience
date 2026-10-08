@@ -5,10 +5,10 @@ Identifiants préfixés par le réseau (« sncf:… ») pour rester uniques entr
 (plus de 86400 pour les trains de nuit).
 
 Rattachement des arrêts : un arrêt dont le code UIC est celui d'une gare de la base pointe vers cette gare (arret.lieu_id). Les autres
-reçoivent leur propre lieu (type « arret_bus » pour un car, « arret_train » sinon), avec leur gare la plus proche si elle est à moins de DISTANCE_GARE_MAX_KM (donc pas pour les arrêts à l'étranger).
+reçoivent leur propre lieu (type « arret_bus » pour un car, `type_lieu` sinon : « arret_train » par défaut, « arret_bus » pour les réseaux urbains), avec leur gare la plus proche si elle est à moins de DISTANCE_GARE_MAX_KM (donc pas pour les arrêts à l'étranger).
 Sans code UIC (réseaux étrangers, Île-de-France), `rayon_gare_m` permet de rattacher un arrêt par sa position : parmi les gares à moins de ce rayon,
 la plus proche dont le nom est compatible (mot en commun), à défaut la plus proche si elle est à moins de DISTANCE_SANS_NOM_M mètres.
-Seuls les arrêts physiques (location_type 0) sont gardés ; les zones d'arrêt (location_type 1) ne servent qu'au regroupement.
+Seuls les arrêts desservis par au moins une circulation sont gardés (les zones d'arrêt qui ne servent qu'au regroupement sont donc écartées).
 """
 import re
 import sys
@@ -28,6 +28,7 @@ from lib.db.models import Arret, Calendrier, Circulation, Gare, Ligne, Lieu, Pas
 from lieux import inserer, lignes_lieu, lire_gares, rattacher_aux_gares
 
 DISTANCE_GARE_MAX_KM = 50          # au-delà, un arrêt n'a pas de gare « proche » (arrêts à l'étranger)
+PAQUET_TRANCHE = 100_000            # lignes converties et insérées à la fois
 DISTANCE_SANS_NOM_M = 50          # sans nom compatible, un arrêt n'est rattaché à une gare que si elle est à moins de cette distance
 MOTS_BANALS = {"gare", "saint", "sainte", "les", "des", "aeroport", "paris", "sncf", "rer"}
 FICHIERS = ["routes", "trips", "stop_times", "stops"]
@@ -97,10 +98,7 @@ def normaliser(brut, reseau_id, uic=None, libelles=None, types_lignes=None):
     `types_lignes` : {route_id: type} qui remplace ce type quand le réseau le connaît autrement.
     Retourne {lignes, circulations, calendrier, arrets, passages} ; arrets a lat, lon, uic et lieu_type en plus des colonnes de la table."""
     p = f"{reseau_id}:"
-    stops = brut["stops"]
-    if "location_type" in stops:                                       # absent chez certains réseaux : tous les arrêts sont alors physiques
-        stops = stops[stops["location_type"].fillna("0").replace("", "0") == "0"]
-    stops = stops.copy()
+    stops = brut["stops"].copy()                                        # seuls ceux que les horaires desservent sont gardés plus bas
     stops["uic"] = stops["stop_id"].map(uic) if uic is not None else None
     stops["libelle"] = stops["stop_id"].map(libelles) if libelles is not None else None
 
@@ -136,8 +134,13 @@ def normaliser(brut, reseau_id, uic=None, libelles=None, types_lignes=None):
         "lat": pd.to_numeric(stops["stop_lat"], errors="coerce"), "lon": pd.to_numeric(stops["stop_lon"], errors="coerce"),
         "uic": stops["uic"], "libelle": stops["libelle"],
     })
+    passages = passages.drop_duplicates(["circulation_id", "ordre"])            # clé de la table : un seul passage par rang dans une circulation
+    arrets = arrets.drop_duplicates("id")
     arrets = arrets[arrets["id"].isin(set(passages["arret_id"]))].reset_index(drop=True)      # seuls les arrêts desservis
     passages = passages[passages["arret_id"].isin(set(arrets["id"]))]
+    lignes, circulations = lignes.drop_duplicates("id"), circulations.drop_duplicates("id")
+    circulations = circulations[circulations["ligne_id"].isin(set(lignes["id"]))]       # une circulation sans ligne connue n'a pas de sens
+    passages = passages[passages["circulation_id"].isin(set(circulations["id"]))]
     return {"lignes": lignes, "circulations": circulations, "calendrier": calendrier, "arrets": arrets, "passages": passages}
 
 
@@ -147,6 +150,12 @@ def _entiers(df, colonnes):
     for c in colonnes:
         out[c] = out[c].map(lambda v: None if v is None else int(v))
     return out.to_dict("records")
+
+
+def _inserer_df(conn, modele, df, colonnes_entieres=()):
+    """Insère un DataFrame par tranches : un gros réseau (millions de passages) ne tient pas en dicts Python d'un seul coup."""
+    for debut in range(0, len(df), PAQUET_TRANCHE):
+        conn.execute(sa.insert(modele), _entiers(df.iloc[debut:debut + PAQUET_TRANCHE], colonnes_entieres))
 
 
 def mots(nom):
@@ -174,7 +183,7 @@ def rattacher_par_position(arrets, gares, rayon_m):
     return resultat
 
 
-def charger(frames, reseau, source, engine=None, rayon_gare_m=None):
+def charger(frames, reseau, source, engine=None, rayon_gare_m=None, type_lieu="arret_train"):
     """Remplace en une transaction tout le réseau : reseau (dict id, nom, mode), lignes, circulations, calendrier, arrêts, passages
     et les lieux d'arrêts créés pour lui. Retourne le nombre de lignes, circulations, arrêts et passages chargés."""
     engine = engine or get_engine()
@@ -200,7 +209,7 @@ def charger(frames, reseau, source, engine=None, rayon_gare_m=None):
                                 columns=["id", "nom", "lat", "lon"]).dropna(subset=["lat", "lon"])
             arrets.loc[libres.index, "lieu_id"] = pd.Series(rattacher_par_position(libres, noms, rayon_gare_m), index=libres.index, dtype=object)
         nouveaux = arrets[arrets["lieu_id"].isna() & arrets["lat"].notna() & arrets["lon"].notna()].copy()
-        nouveaux["type"] = nouveaux["libelle"].fillna("").str.startswith("Car").map({True: "arret_bus", False: "arret_train"})
+        nouveaux["type"] = nouveaux["libelle"].fillna("").str.startswith("Car").map({True: "arret_bus", False: type_lieu})
         premier = (conn.scalar(sa.select(sa.func.max(Lieu.id))) or 0) + 1
         nouveaux["lieu_id"] = range(premier, premier + len(nouveaux))
         lieux = rattacher_aux_gares(nouveaux[["nom", "lat", "lon"]], gares).assign(id=nouveaux["lieu_id"].to_numpy())
@@ -213,9 +222,9 @@ def charger(frames, reseau, source, engine=None, rayon_gare_m=None):
 
         conn.execute(sa.insert(Reseau), [{**reseau, "source": source}])
         inserer(conn, Lieu, lignes_lieux)
-        inserer(conn, Ligne, _entiers(frames["lignes"], []))
-        inserer(conn, Arret, _entiers(arrets[["id", "reseau_id", "lieu_id", "nom"]], ["lieu_id"]))
-        inserer(conn, Circulation, _entiers(frames["circulations"], []))
-        inserer(conn, Calendrier, _entiers(frames["calendrier"], []))
-        inserer(conn, Passage, _entiers(frames["passages"], ["ordre", "heure_arrivee", "heure_depart"]))
+        _inserer_df(conn, Ligne, frames["lignes"])
+        _inserer_df(conn, Arret, arrets[["id", "reseau_id", "lieu_id", "nom"]], ["lieu_id"])
+        _inserer_df(conn, Circulation, frames["circulations"])
+        _inserer_df(conn, Calendrier, frames["calendrier"])
+        _inserer_df(conn, Passage, frames["passages"], ["ordre", "heure_arrivee", "heure_depart"])
     return len(frames["lignes"]), len(frames["circulations"]), len(arrets), len(frames["passages"])
