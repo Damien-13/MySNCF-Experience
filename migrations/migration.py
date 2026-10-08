@@ -2,7 +2,7 @@
 
 Usage :
     python migrations/migration.py                          # met la base à jour (001, puis 002 si elle existe…)
-    python migrations/migration.py --nouvelle "ajoute X"    # crée la migration suivante (numéro = dernier + 1)
+    python migrations/migration.py --new "ajoute X"    # crée la migration suivante (numéro = dernier + 1)
 """
 import argparse
 import sys
@@ -16,7 +16,7 @@ from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 
-from lib.bdd.connexion import get_engine
+from lib.db.connection import get_engine
 
 
 def _config():
@@ -25,24 +25,24 @@ def _config():
     return cfg
 
 
-def version_actuelle():
+def current_version():
     """Dernière migration appliquée à la base (None si la base est vide)."""
     with get_engine().connect() as conn:
         return MigrationContext.configure(conn).get_current_revision()
 
 
-def derniere_version(cfg):
+def latest_version(cfg):
     return ScriptDirectory.from_config(cfg).get_current_head()
 
 
-def migrer():
+def migrate():
     cfg = _config()
-    print(f"Base : version {version_actuelle() or 'vide'} → cible {derniere_version(cfg) or 'aucune migration'}")
+    print(f"Base : version {current_version() or 'vide'} → cible {latest_version(cfg) or 'aucune migration'}")
     command.upgrade(cfg, "head")
-    print(f"Base à jour : version {version_actuelle()}")
+    print(f"Base à jour : version {current_version()}")
 
 
-def nouvelle(message):
+def new(message):
     cfg = _config()
     versions = [int(r.revision) for r in ScriptDirectory.from_config(cfg).walk_revisions() if r.revision.isdigit()]
     numero = f"{max(versions, default=0) + 1:03d}"
@@ -52,6 +52,6 @@ def nouvelle(message):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--nouvelle", metavar="MESSAGE", help="crée la prochaine migration d'après lib/bdd/modeles.py")
+    parser.add_argument("--new", metavar="MESSAGE", help="crée la prochaine migration d'après lib/db/models.py")
     args = parser.parse_args()
-    nouvelle(args.nouvelle) if args.nouvelle else migrer()
+    new(args.new) if args.new else migrate()

@@ -16,8 +16,8 @@ from sqlalchemy import inspect, select
 from sqlalchemy.orm import Session
 
 import migration
-from lib.bdd.connexion import get_engine
-from lib.bdd.modeles import Base, Evenement, EvenementLieu, EvenementPeriode, Gare, Lieu
+from lib.db.connection import get_engine
+from lib.db.models import Base, Evenement, EvenementLieu, EvenementPeriode, Gare, Lieu
 
 
 @pytest.fixture
@@ -28,35 +28,35 @@ def base(monkeypatch):
         yield
 
 
-def test_migration_cree_toutes_les_tables(base):
-    migration.migrer()
+def test_migration_creates_all_tables(base):
+    migration.migrate()
     tables = set(inspect(get_engine()).get_table_names())
     assert set(Base.metadata.tables) <= tables
 
 
-def test_migration_va_jusqu_a_la_derniere_version(base):
-    migration.migrer()
-    assert migration.version_actuelle() == migration.derniere_version(migration._config())
+def test_migration_reaches_latest_version(base):
+    migration.migrate()
+    assert migration.current_version() == migration.latest_version(migration._config())
 
 
-def test_relancer_la_migration_ne_change_rien(base):
-    migration.migrer()
-    version = migration.version_actuelle()
-    migration.migrer()
-    assert migration.version_actuelle() == version
+def test_rerunning_migration_changes_nothing(base):
+    migration.migrate()
+    version = migration.current_version()
+    migration.migrate()
+    assert migration.current_version() == version
 
 
-def test_migrations_alignees_sur_les_modeles(base):
-    """Si ce test échoue : lib/bdd/modeles.py a changé sans nouvelle migration (python migrations/migration.py --nouvelle "...")."""
-    migration.migrer()
+def test_migrations_match_models(base):
+    """Si ce test échoue : lib/db/models.py a changé sans nouvelle migration (python migrations/migration.py --new "...")."""
+    migration.migrate()
     with get_engine().connect() as conn:
         ecarts = compare_metadata(MigrationContext.configure(conn), Base.metadata)
     assert ecarts == []
 
 
-def test_ecriture_et_lecture(base):
+def test_write_and_read(base):
     """Une gare, un lieu d'événement et leurs liens s'enregistrent et se relisent."""
-    migration.migrer()
+    migration.migrate()
     with Session(get_engine()) as s:
         gare = Lieu(type="gare", nom="Toulon", lat=43.128, lon=5.93)
         s.add(gare)

@@ -1,8 +1,8 @@
-"""Environnement Alembic : la base vient de DATABASE_URL, les tables de lib/bdd/modeles.py."""
+"""Environnement Alembic : la base vient de DATABASE_URL, les tables de lib/db/models.py."""
 from alembic import context
 
-from lib.bdd.connexion import get_engine
-from lib.bdd.modeles import Base
+from lib.db.connection import get_engine
+from lib.db.models import Base
 
 target_metadata = Base.metadata
 
