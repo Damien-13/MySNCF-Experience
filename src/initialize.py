@@ -23,7 +23,8 @@ from lib.downloader import download
 # Ce sont celles que lit la transformation (src/transformation/) : en ajouter une avec son étape.
 DATA = ROOT / "data"
 SOURCES = ["gares_voyageurs", "horaires_gares", "basilic", "datatourisme_place", "datatourisme_fma",
-           "velo_stationnement_osm", "velo_stationnement_gares_centre_val_de_loire", "vls_paris_velib", "vls_lyon_velov"]
+           "velo_stationnement_osm", "velo_stationnement_gares_centre_val_de_loire", "vls_paris_velib", "vls_lyon_velov",
+           "horaires_sncf_gtfs"]
 
 
 def create_database():

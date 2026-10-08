@@ -13,11 +13,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import culture
 import evenement
 import gare
+import sncf
 import tourisme
 import velo
 
 ETAPES = [
     ("gares", gare),
+    ("sncf", sncf),
     ("culture", culture),
     ("tourisme", tourisme),
     ("evenements", evenement),
