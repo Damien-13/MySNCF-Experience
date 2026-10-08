@@ -85,3 +85,20 @@ def test_charger_ne_touche_pas_aux_autres_lieux(db):
     gare.charger(gares, gare.associer_horaires(gares, gare.nettoyer_horaires(HORAIRES))[0])
     with Session(get_engine()) as s:
         assert s.scalar(select(func.count()).select_from(Lieu).where(Lieu.type == "culture")) == 1
+
+
+def test_recharger_garde_les_identifiants_des_gares(db):
+    gares = gare.nettoyer_gares(GARES)
+    horaires, _ = gare.associer_horaires(gares, gare.nettoyer_horaires(HORAIRES))
+    gare.charger(gares, horaires)
+    with Session(get_engine()) as s:
+        avant = {g.code_uic: g.lieu_id for g in s.scalars(select(Gare))}
+    # une gare du fichier disparaît, une autre change de nom : les autres gardent leur identifiant, rien ne se décale
+    suivant = gares[gares["code_uic"] != "87773002"].assign(nom=lambda d: d["nom"].where(d["code_uic"] != "87313759", "Abancourt (renommée)"))
+    gare.charger(suivant, horaires[horaires["code_uic"].isin(suivant["code_uic"])])
+    with Session(get_engine()) as s:
+        apres = {g.code_uic: g.lieu_id for g in s.scalars(select(Gare))}
+        assert apres == {c: i for c, i in avant.items() if c != "87773002"}
+        assert s.get(Lieu, avant["87313759"]).nom == "Abancourt (renommée)"
+        assert s.get(Lieu, avant["87773002"]) is None
+        assert s.scalar(select(func.count()).select_from(Lieu)) == 2
