@@ -74,7 +74,9 @@ def test_initialize_loads_the_data_after_the_download(db_path, monkeypatch):
 
 
 def test_every_listed_source_is_read_by_the_transformation():
-    assert set(initialize.SOURCES) == {"gares_voyageurs", "horaires_gares", "basilic", "datatourisme_place", "datatourisme_fma"}
+    assert set(initialize.SOURCES) == {"gares_voyageurs", "horaires_gares", "basilic", "datatourisme_place", "datatourisme_fma",
+                                    "velo_stationnement_osm", "velo_stationnement_gares_centre_val_de_loire", "vls_paris_velib", "vls_lyon_velov",
+                                    "horaires_sncf_gtfs", "transilien", "eurostar", "renfe_ave", "trenitalia_france"}
 
 
 def test_initialize_rejects_source_without_url(db_path, monkeypatch):

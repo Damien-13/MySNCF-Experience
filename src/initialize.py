@@ -22,7 +22,9 @@ from lib.downloader import download
 # Sources nécessaires à l'application : le nom court, sans DATASET_ ni _URL (« basilic » pour DATASET_BASILIC_URL du .env).
 # Ce sont celles que lit la transformation (src/transformation/) : en ajouter une avec son étape.
 DATA = ROOT / "data"
-SOURCES = ["gares_voyageurs", "horaires_gares", "basilic", "datatourisme_place", "datatourisme_fma"]
+SOURCES = ["gares_voyageurs", "horaires_gares", "basilic", "datatourisme_place", "datatourisme_fma",
+           "velo_stationnement_osm", "velo_stationnement_gares_centre_val_de_loire", "vls_paris_velib", "vls_lyon_velov",
+           "horaires_sncf_gtfs", "transilien", "eurostar", "renfe_ave", "trenitalia_france"]
 
 
 def create_database():
