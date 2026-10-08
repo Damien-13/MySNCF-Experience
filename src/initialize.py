@@ -1,4 +1,4 @@
-"""Initialisation du projet : crée la base de données, puis télécharge les données nécessaires.
+"""Initialisation du projet : crée la base de données, télécharge les données nécessaires, puis les nettoie et les charge dans la base.
 
 Usage : python src/initialize.py
 Relançable sans risque (base déjà à jour = rien à faire). Pas de saisie au clavier et tout vient du .env,
@@ -11,15 +11,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "migrations"))
+sys.path.insert(0, str(ROOT / "src" / "transformation"))
 
 from sqlalchemy.engine import make_url
 
 import migration
+import transformation
 from lib.downloader import download
 
 # Sources nécessaires à l'application : le nom court, sans DATASET_ ni _URL (« basilic » pour DATASET_BASILIC_URL du .env).
-# À compléter une fois les besoins identifiés.
-SOURCES = ["basilic"]
+# Ce sont celles que lit la transformation (src/transformation/) : en ajouter une avec son étape.
+DATA = ROOT / "data"
+SOURCES = ["gares_voyageurs", "horaires_gares", "basilic", "datatourisme_place", "datatourisme_fma"]
 
 
 def create_database():
@@ -33,20 +36,26 @@ def create_database():
 
 
 def download_data():
-    """Télécharge les sources nécessaires (rien tant que SOURCES est vide)."""
-    if not SOURCES:
-        print("Données : aucune source à télécharger pour l'instant (SOURCES vide dans src/initialize.py)")
-        return
+    """Télécharge les sources nécessaires qui ne sont pas déjà dans data/<source>/ (pour ne pas retélécharger des centaines de Mo)."""
     unknown = [s for s in SOURCES if f"DATASET_{s.upper()}_URL" not in os.environ]
     if unknown:
         sys.exit(f"Source sans URL dans le .env : {unknown} (attendu : DATASET_<SOURCE>_URL, nom court dans SOURCES, ex. 'basilic')")
-    download(SOURCES)
+    missing = [s for s in SOURCES if not any((DATA / s).glob("*"))]
+    if missing:
+        download(missing)
+    print(f"Données : {len(SOURCES) - len(missing)} source(s) déjà présente(s), {len(missing)} téléchargée(s)")
+
+
+def load_data():
+    """Nettoie les données téléchargées et les charge dans la base (src/transformation/transformation.py)."""
+    transformation.transformer()
 
 
 def initialize():
     os.chdir(ROOT)               # les chemins relatifs du .env (data/…) partent de la racine du projet
     create_database()
     download_data()
+    load_data()
 
 
 if __name__ == "__main__":
