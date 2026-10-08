@@ -17,8 +17,9 @@ from sqlalchemy.engine import make_url
 import migration
 from lib.downloader import download
 
-# Sources nécessaires à l'application (noms des DATASET_<SOURCE>_URL du .env). À compléter une fois les besoins identifiés.
-SOURCES = []
+# Sources nécessaires à l'application : le nom court, sans DATASET_ ni _URL (« basilic » pour DATASET_BASILIC_URL du .env).
+# À compléter une fois les besoins identifiés.
+SOURCES = ["basilic"]
 
 
 def create_database():
@@ -36,6 +37,9 @@ def download_data():
     if not SOURCES:
         print("Données : aucune source à télécharger pour l'instant (SOURCES vide dans src/initialize.py)")
         return
+    unknown = [s for s in SOURCES if f"DATASET_{s.upper()}_URL" not in os.environ]
+    if unknown:
+        sys.exit(f"Source sans URL dans le .env : {unknown} (attendu : DATASET_<SOURCE>_URL, nom court dans SOURCES, ex. 'basilic')")
     download(SOURCES)
 
 

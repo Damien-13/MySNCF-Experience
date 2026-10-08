@@ -52,5 +52,11 @@ def test_initialize_downloads_the_listed_sources(db_path, monkeypatch):
     assert asked == [["gares_voyageurs"]]
 
 
+def test_initialize_rejects_source_without_url(db_path, monkeypatch):
+    monkeypatch.setattr(initialize, "SOURCES", ["DATASET_BASILIC_URL"])      # nom complet au lieu du nom court
+    with pytest.raises(SystemExit):
+        initialize.initialize()
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
