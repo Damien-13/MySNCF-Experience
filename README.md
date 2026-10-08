@@ -87,7 +87,7 @@ Une étape par domaine, dans `src/transformation/` (nettoyage, transformation et
   la source des TER (40 % de ces circulations s'y trouvaient déjà). Arrêts rattachés à la gare de la base la plus proche à moins de 300 m
   dont le nom est compatible, ou à moins de 50 m.
 - `trains_europeens.py` : Eurostar (rattaché par code UIC), Renfe AVE et Trenitalia France (rattachés par position) → mêmes tables.
-- `bus.py` : 20 réseaux urbains (bus, tram, métro, bateau…) et Île-de-France Mobilités → mêmes tables. Chaque arrêt a son lieu `arret_bus` avec sa
+- `bus.py` : 21 réseaux urbains (bus, tram, métro, bateau…) et Île-de-France Mobilités → mêmes tables. Chaque arrêt a son lieu `arret_bus` avec sa
   gare la plus proche (jamais rattaché à une gare). Pour l'Île-de-France, seules les lignes qui ne sont pas des trains sont gardées : les RER,
   Transilien et TER du même fichier sont déjà dans `transilien.py`. Environ 40 millions de passages : la base fait alors environ 9 Go et le
   chargement complet prend plusieurs dizaines de minutes.

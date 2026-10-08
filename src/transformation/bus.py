@@ -1,4 +1,4 @@
-"""Transformation des réseaux urbains (bus, tram, métro, bateau…) de 20 agglomérations et d'Île-de-France : GTFS vers reseau, ligne, circulation,
+"""Transformation des réseaux urbains (bus, tram, métro, bateau…) de 21 agglomérations et d'Île-de-France : GTFS vers reseau, ligne, circulation,
 calendrier, arret et passage. Outils communs : gtfs.py.
 
 Usage : python src/transformation/bus.py   (les gares doivent déjà être chargées : voir transformation.py)
@@ -35,6 +35,7 @@ RESEAUX = {
     "bus_toulon_mistral": ("toulon_mistral", "Mistral (Toulon)"),
     "bus_angers_irigo": ("angers_irigo", "Irigo (Angers)"),
     "bus_tours_fil_bleu": ("tours_fil_bleu", "Fil Bleu (Tours)"),
+    "bus_clermont_t2c": ("clermont_t2c", "T2C (Clermont-Ferrand)"),
     "bus_orleans_tao": ("orleans_tao", "TAO (Orléans)"),
     "bus_dijon_divia": ("dijon_divia", "Divia (Dijon)"),
     "bus_brest_bibus": ("brest_bibus", "Bibus (Brest)"),
