@@ -4,7 +4,7 @@ requests>=2.31
 pytest
 
 # Base de données (lib/db/, migrations/)
-sqlalchemy>=2.0
+sqlalchemy>=2.0.44
 alembic>=1.13
 psycopg[binary]>=3.1
 
