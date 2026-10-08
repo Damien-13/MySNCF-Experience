@@ -10,7 +10,11 @@ Quatre sources, une ligne par station ou par parking (lieu.source = nom de la so
 - velo_stationnement_gares_centre_val_de_loire : parkings en gare de la région (réseau « stationnement »)
 - vls_paris_velib : stations Vélib' (réseau « velib »)
 - vls_lyon_velov : stations Vélo'v (réseau « velov »)
-Un parking d'OpenStreetMap peut aussi figurer dans le fichier de la région : aucun rapprochement n'est fait entre les deux.
+
+Chevauchement : la région et OpenStreetMap décrivent les mêmes parkings en gare (98 % des parkings de la région ont un parking
+OpenStreetMap à moins de 25 m, pour 3 285 places contre 3 129). Règle de gestion : la source officielle de la région prime, et les parkings
+OpenStreetMap à moins de RAYON_CHEVAUCHEMENT_M mètres d'un de ses parkings sont écartés. Pas de rapprochement pour Vélib' et Vélo'v (des bornes
+de libre-service, pas des parkings) ni à l'intérieur d'OpenStreetMap (des arceaux voisins, rarement de même capacité, pas des copies).
 
 Nettoyage : sans position valide, hors de la France continentale (étranger, Corse, outre-mer) ou en double dans sa source : écarté.
 Une capacité manquante ou nulle est laissée vide.
@@ -25,13 +29,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pandas as pd
 import sqlalchemy as sa
 
-from geo import dans_la_france_continentale, en_france_continentale
+from geo import a_proximite, dans_la_france_continentale, en_france_continentale
 from lib.db.connection import get_engine
 from lib.db.models import Lieu, StationVelo
 from lieux import inserer, lignes_lieu, lire_gares, rattacher_aux_gares
 
 DATA = ROOT / "data"
 TYPE = "station_velo"
+REGION = "velo_stationnement_gares_centre_val_de_loire"
+OSM = "velo_stationnement_osm"
+RAYON_CHEVAUCHEMENT_M = 25
 COLONNES = ["nom", "commune", "departement", "lat", "lon", "reseau", "capacite", "source"]
 
 
@@ -84,6 +91,14 @@ def nettoyer(stations):
     return stations[valides].drop_duplicates(["source", "lat", "lon", "nom", "capacite"]).reset_index(drop=True)
 
 
+def ecarter_chevauchements(stations):
+    """Écarte les parkings OpenStreetMap qui doublonnent un parking de la région (voir la règle en tête de fichier)."""
+    region = stations[stations["source"] == REGION]
+    osm = stations["source"] == OSM
+    doublon = osm & a_proximite(stations["lat"], stations["lon"], region["lat"], region["lon"], RAYON_CHEVAUCHEMENT_M)
+    return stations[~doublon].reset_index(drop=True)
+
+
 def lire():
     """Les quatre sources, au même format. Retourne (stations, nombre de lignes lues)."""
     brutes = [
@@ -119,12 +134,14 @@ def charger(stations, engine=None):
 
 def transformer():
     brut, lues = lire()
-    stations = nettoyer(brut)
+    propres = nettoyer(brut)
+    stations = ecarter_chevauchements(propres)
     gares = lire_gares()
     if gares.empty:
         sys.exit("Aucune gare en base : lancer d'abord l'étape gares (python src/transformation/transformation.py)")
     nb = charger(rattacher_aux_gares(stations, gares))
-    print(f"Vélo : {nb} stations chargées ({lues - nb} écartées sur {lues} : hors France continentale, doublons ou position invalide)")
+    print(f"Vélo : {nb} stations chargées ({lues - len(propres)} écartées sur {lues} : hors France continentale, doublons ou position invalide ; "
+          f"{len(propres) - nb} parkings OpenStreetMap écartés car déjà dans le fichier de la région)")
     return nb
 
 

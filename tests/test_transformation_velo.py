@@ -75,3 +75,22 @@ def test_charger_remplace_et_ne_touche_pas_aux_autres_lieux(db):
         assert s.get(Lieu, blois.lieu_id).gare_proche_id == 1
         sans_capacite = s.scalar(select(StationVelo).join(Lieu, Lieu.id == StationVelo.lieu_id).where(Lieu.departement == "69"))
         assert sans_capacite.capacite is None
+
+
+def test_a_proximite():
+    # 1 degré de latitude ≈ 111 km : 0,0001° ≈ 11 m ; 0,001° ≈ 111 m
+    proche = geo.a_proximite([47.0, 47.0, 47.0], [1.0, 1.0001, 1.001], [47.0], [1.0], 25)
+    assert list(proche) == [True, True, False]
+    assert not geo.a_proximite([47.0], [1.0], [], [], 25).any()
+
+
+def test_ecarter_chevauchements_la_region_prime():
+    stations = pd.DataFrame({
+        "source": ["velo_stationnement_gares_centre_val_de_loire", "velo_stationnement_osm", "velo_stationnement_osm", "vls_paris_velib", "velo_stationnement_osm"],
+        "lat": [47.0, 47.0001, 47.001, 47.0, 48.0], "lon": [1.0, 1.0, 1.0, 1.0, 2.0],
+        "nom": [None] * 5, "commune": [None] * 5, "departement": ["41"] * 5, "reseau": ["x"] * 5, "capacite": [10, 10, 10, 20, 10],
+    })
+    out = velo.ecarter_chevauchements(stations)
+    # écarté : le parking OSM à ~11 m de celui de la région. Gardés : la région, l'OSM à ~111 m, le Vélib' au même endroit, l'OSM ailleurs.
+    assert list(out["source"]) == ["velo_stationnement_gares_centre_val_de_loire", "velo_stationnement_osm", "vls_paris_velib", "velo_stationnement_osm"]
+    assert list(out["lat"]) == [47.0, 47.001, 47.0, 48.0]

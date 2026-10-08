@@ -1,6 +1,7 @@
 """Calculs géographiques communs aux étapes de la transformation."""
 import numpy as np
 import pandas as pd
+from scipy.spatial import cKDTree
 
 RAYON_TERRE_KM = 6371.0088
 PAQUET = 2_000        # lieux comparés à toutes les gares à la fois (borne la mémoire : PAQUET × nb de gares)
@@ -51,3 +52,15 @@ def dans_la_france_continentale(lat, lon):
     lat, lon = pd.Series(lat), pd.Series(lon)
     corse = lat.lt(43.3) & lon.gt(8.3)
     return lat.between(41.3, 51.2) & lon.between(-5.3, 9.7) & ~corse
+
+
+def a_proximite(lat, lon, cibles_lat, cibles_lon, rayon_m):
+    """Tableau de booléens : chaque point (lat, lon) a-t-il une cible à moins de `rayon_m` mètres ?
+    Distances calculées à plat autour de la position (juste à quelques mètres près en France pour des rayons de quelques dizaines de mètres)."""
+    def plat(la, lo):
+        la, lo = np.asarray(la, float), np.asarray(lo, float)
+        return np.c_[lo * np.cos(np.radians(la)) * 111_320, la * 111_320]
+    if len(cibles_lat) == 0:
+        return np.zeros(len(lat), dtype=bool)
+    distances, _ = cKDTree(plat(cibles_lat, cibles_lon)).query(plat(lat, lon))
+    return distances < rayon_m
