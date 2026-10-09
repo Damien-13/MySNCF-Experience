@@ -12,25 +12,25 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 import sqlalchemy as sa
+from shapely.geometry import LineString
 
 from lib.db.connection import get_engine
 from lib.itineraire import style_ligne
 from lib import sprites
 from lib.reseau_ferre import TYPES_HORS_RAIL
 
-MAX_POINTS = 12                 # points gardés par tracé : le dashboard n'affiche que des repères pour tout le réseau
+TOLERANCE_DEG = 0.0001          # simplification des tracés à environ 10 m près (un train ne s'écarte pas de la voie de plus que ça)
 FENETRE_S = 900                 # on envoie les trains qui roulent maintenant et ceux qui partent dans les 15 prochaines minutes
 MARGE_S = 60
 
 _cache = {}
 
 
-def _decimer(points, maximum=MAX_POINTS):
-    """Au plus `maximum` points d'un tracé [[lat, lon], …], en gardant le premier et le dernier."""
-    if len(points) <= maximum:
+def _simplifier(points, tolerance=TOLERANCE_DEG):
+    """Tracé [[lon, lat], …] allégé (Douglas-Peucker) : on garde la forme des courbes à `tolerance` près, au lieu d'un point sur N qui couperait les virages."""
+    if len(points) <= 2:
         return points
-    pas = (len(points) - 1) / (maximum - 1)
-    return [points[round(i * pas)] for i in range(maximum)]
+    return [list(p) for p in LineString(points).simplify(tolerance, preserve_topology=False).coords]
 
 
 def charger(engine=None):
@@ -52,7 +52,7 @@ def charger(engine=None):
     segments["style"] = segments["type_transport"].map(styles).where(segments["type_transport"].notna(), None)
     segments["style"] = segments["style"].apply(lambda s: s if isinstance(s, dict) else inconnu)
     with engine.connect() as conn:
-        traces = {(a, b): (json.loads(g), bool(v)) for a, b, g, v in conn.execute(sa.text("SELECT arret_depart_id, arret_arrivee_id, geometrie, sur_voie FROM trace_trajet"))}
+        traces = {(a, b): (_simplifier(json.loads(g)), bool(v)) for a, b, g, v in conn.execute(sa.text("SELECT arret_depart_id, arret_arrivee_id, geometrie, sur_voie FROM trace_trajet"))}
         noms = dict(conn.execute(sa.text("SELECT id, nom FROM arret")).all())
     _cache[cle] = {"segments": segments, "traces": traces, "noms": noms}
     return _cache[cle]
@@ -66,7 +66,7 @@ def _services(engine, jour):
 def en_cours(maintenant=None, engine=None, fenetre_s=FENETRE_S):
     """Trains qui roulent à `maintenant` ou partent dans `fenetre_s` secondes : un dict par segment, avec id (la circulation, pour garder le même repère
     d'un arrêt au suivant), libelle, style, sprite / longueur_m / rapport (l'image du train et sa taille réelle, voir lib/sprites.py), de, vers, points [[lat, lon], …],
-    t0, t1 (secondes depuis l'époque), retard_min (0), marche (faux)."""
+    t0, t1 (secondes depuis l'époque), retard_min (0), marche (faux), sur_voie (faux : tracé en ligne droite, pas collé aux voies)."""
     engine = engine or get_engine()
     maintenant = maintenant or datetime.now()
     donnees = charger(engine)
@@ -91,7 +91,7 @@ def en_cours(maintenant=None, engine=None, fenetre_s=FENETRE_S):
             trains.append({
                 **apparence, "id": ligne.circulation, "libelle": libelle, "style": ligne.style,
                 "de": donnees["noms"].get(ligne.a), "vers": donnees["noms"].get(ligne.b),
-                "points": [[round(lat, 4), round(lon, 4)] for lon, lat in _decimer(trace[0])],        # trace_trajet stocke [lon, lat]
-                "t0": debut_jour.timestamp() + ligne.t0, "t1": debut_jour.timestamp() + ligne.t1, "retard_min": 0, "marche": False,
+                "points": [[round(lat, 5), round(lon, 5)] for lon, lat in trace[0]],        # trace_trajet stocke [lon, lat]
+                "t0": debut_jour.timestamp() + ligne.t0, "t1": debut_jour.timestamp() + ligne.t1, "retard_min": 0, "marche": False, "sur_voie": trace[1],
             })
     return trains

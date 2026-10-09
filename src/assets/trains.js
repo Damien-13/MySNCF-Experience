@@ -11,12 +11,14 @@
  *   horloge : {mode: "reel"} ou {mode: "sim", t0_reel: secondes} (le trajet défile à VITESSE_SIM fois la vitesse réelle).
  *
  * Taille : un train fait sa longueur réelle (100 à 200 m) à l'échelle de la carte, donc il grandit en zoomant et rapetisse en dézoomant.
- * C'est toujours son image : à très grande échelle, 200 m ne feraient pas un pixel, donc il ne descend jamais sous LONGUEUR_MIN_PX pour rester visible.
+ * C'est toujours son image. Seuls les trains du trajet choisi (ou simulé) ne descendent jamais sous LONGUEUR_MIN_PX, pour rester visibles ;
+ * les trains « tous réseaux » rapetissent presque à l'échelle exacte (plancher de LONGUEUR_MIN_TOUS_PX).
  * Clic sur un train : fenêtre d'informations, et la caméra le suit jusqu'à la fermeture de la fenêtre ou un déplacement de la carte à la main.
  */
 (function () {
   const VITESSE_SIM = 120;           // 1 seconde réelle = 2 minutes de trajet, comme lib/suivi.py
-  const LONGUEUR_MIN_PX = 16;        // plancher de longueur à l'écran : sans lui, un train de 200 m disparaîtrait en dézoomant (mettre 0 pour l'échelle exacte)
+  const LONGUEUR_MIN_PX = 16;        // plancher de longueur à l'écran pour les trains du TRAJET CHOISI : sans lui, ils disparaîtraient en dézoomant (0 = échelle exacte)
+  const LONGUEUR_MIN_TOUS_PX = 6;    // plancher beaucoup plus petit pour les trains « tous réseaux » : de petits repères en dézoomant, sans encombrer la carte (0 = échelle exacte, ils disparaissent)
   const LARGEUR_MAX_PX = 700;
   const ETIREMENT = 1.8;             // les trains vus du dessus sont très fins : on les élargit un peu pour qu'on les reconnaisse
   const PAS_TOUS_MS = 200;           // les trains « tous réseaux » sont recalculés 5 fois par seconde (il y en a des milliers)
@@ -132,22 +134,26 @@
       + `<div class="service">${e.style.libelle}</div>`
       + (e.de ? `<div>${e.de} → ${e.vers}</div>` : "")
       + `<div>Départ ${heure(e.t0)} · Arrivée ${heure(e.t1)}</div>${retard}`
+      + (e.sur_voie === false ? `<div class="astuce">Tracé approximatif : ligne droite entre les gares (pas de voie trouvée).</div>` : "")
       + `<div class="barre"><div style="width:${(f * 100).toFixed(1)}%;background:${e.style.couleur}"></div></div>`
       + `<div>${Math.round(f * 100)} % du parcours · ${km.toFixed(0)} km`
       + (heures > 0 ? ` · ${Math.round(km / heures)} km/h de moyenne` : "") + `</div><div class="astuce">La caméra suit ce train.</div></div>`;
   }
 
   // Taille d'un repère à l'échelle de la carte : sa longueur réelle en mètres divisée par les mètres que représente un pixel.
-  function afficher(m, e, pos, carte) {
+  function afficher(m, e, pos, carte, tous) {
     m.setLatLng([pos.lat, pos.lon]);
     if (!m._img) return;                              // sans image de train (car) : la pastille reste
     const mpp = (156543.03392 * Math.cos((pos.lat * Math.PI) / 180)) / Math.pow(2, carte.getZoom());
-    const l = Math.min(Math.max(e.longueur_m / mpp, LONGUEUR_MIN_PX), LARGEUR_MAX_PX);
-    const h = Math.max((l / e.rapport) * ETIREMENT, 4), deg = Math.round(pos.cap - 90);
+    const reel = e.longueur_m / mpp;
+    const l = Math.min(Math.max(reel, tous ? LONGUEUR_MIN_TOUS_PX : LONGUEUR_MIN_PX), LARGEUR_MAX_PX);
+    const visible = l > 0;
+    const h = Math.max((l / e.rapport) * ETIREMENT, tous ? 1.5 : 4), deg = Math.round(pos.cap - 90);
     const d = m._derniere;
-    if (d && Math.abs(d.l - l) < 0.4 && d.deg === deg) return;       // rien n'a changé à l'écran : on ne touche pas au DOM (il y a des milliers de trains)
-    m._derniere = { l, deg };
-    m._img.style.display = "block";
+    if (d && d.visible === visible && Math.abs(d.l - l) < 0.4 && d.deg === deg) return;   // rien n'a changé à l'écran : on ne touche pas au DOM (il y a des milliers de trains)
+    m._derniere = { l, deg, visible };
+    m._img.style.display = visible ? "block" : "none";
+    if (!visible) return;
     m._img.style.width = l.toFixed(1) + "px";
     m._img.style.height = h.toFixed(1) + "px";
     m._img.style.transform = `rotate(${deg}deg)`;
@@ -173,7 +179,7 @@
       vus.add(clef);
       const pos = pointA(e, (t - e.t0) / (e.t1 - e.t0));
       if (!S.sel[clef]) S.sel[clef] = creerRepere(carte, e, clef, false);
-      afficher(S.sel[clef], e, pos, carte);
+      afficher(S.sel[clef], e, pos, carte, false);
       e._pos = pos;
     });
     Object.keys(S.sel).forEach((clef) => { if (!vus.has(clef)) retirer(S.sel, clef); });
@@ -217,7 +223,7 @@
       if (S.suivi !== clef && !zone.contains([pos.lat, pos.lon])) continue;   // hors de l'écran : pas de repère
       vus.add(clef);
       if (!S.tousMarq[clef]) S.tousMarq[clef] = creerRepere(carte, e, clef, true);
-      afficher(S.tousMarq[clef], e, pos, carte);
+      afficher(S.tousMarq[clef], e, pos, carte, true);
     }
     Object.keys(S.tousMarq).forEach((clef) => { if (!vus.has(clef)) retirer(S.tousMarq, clef); });
   }

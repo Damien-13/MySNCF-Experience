@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "migrations"))
 
+from shapely.geometry import LineString, Point
 from sqlalchemy.orm import Session
 
 import migration
@@ -54,6 +55,7 @@ def test_trains_en_cours_a_une_heure_donnee(engine):
     assert [t["id"] for t in trains] == ["c1"]                           # ni le car, ni le bus, ni le service qui ne roule pas ce jour-là
     t = trains[0]
     assert t["libelle"] == "TGV INOUI 6101" and t["style"]["cle"] == "inoui" and (t["de"], t["vers"]) == ("Gare A", "Gare B")
+    assert t["sur_voie"] is True
     assert t["sprite"] == "inoui" and t["longueur_m"] == 200 and t["rapport"] > 10             # l'image du train et sa taille réelle, pour le navigateur
     assert t["points"][0] == [48.0, 2.0] and t["points"][-1] == [48.0, 2.2]      # converti en [lat, lon] pour la carte
     assert t["t1"] - t["t0"] == 3600 and datetime.fromtimestamp(t["t0"]) == datetime(2026, 10, 12, 8, 0)
@@ -80,8 +82,12 @@ def test_sans_trace_en_base_rien_n_est_affiche(engine):
     assert circulations.en_cours(datetime(2026, 10, 12, 8, 30), engine) == []
 
 
-def test_decimation_garde_les_extremites():
-    points = [[float(i), 0.0] for i in range(100)]
-    reduit = circulations._decimer(points, 12)
-    assert len(reduit) == 12 and reduit[0] == points[0] and reduit[-1] == points[-1]
-    assert circulations._decimer(points[:5], 12) == points[:5]
+def test_simplification_garde_la_forme_des_courbes():
+    # Un quart de cercle de 6 km de rayon décrit par 200 points : 12 points pris au hasard le couperaient, ici l'écart reste sous la tolérance.
+    import math
+    arc = [[2.0 + 0.08 * math.sin(a / 200 * math.pi / 2), 48.0 + 0.054 * (1 - math.cos(a / 200 * math.pi / 2))] for a in range(201)]
+    simple = circulations._simplifier(arc)
+    assert 12 < len(simple) < len(arc) and simple[0] == arc[0] and simple[-1] == arc[-1]
+    ecart = max(LineString(simple).distance(Point(p)) for p in arc)
+    assert ecart <= circulations.TOLERANCE_DEG + 1e-9
+    assert circulations._simplifier([[0, 0], [1, 1]]) == [[0, 0], [1, 1]]
