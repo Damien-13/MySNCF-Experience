@@ -192,3 +192,44 @@ def test_periode_invalide():
     assert periode_invalide(datetime(2026, 10, 9, 16, 0), maintenant) is None
     assert "30" in periode_invalide(datetime(2026, 12, 1, 9, 0), maintenant)
     assert periode_invalide(None, maintenant) is None
+
+
+def test_bornes_dates_selon_la_periode_de_l_evenement():
+    from datetime import date
+    from lib.itineraire import bornes_dates
+    jour = date(2026, 10, 9)
+    assert bornes_dates(None, jour) == (jour, date(2026, 11, 8), True)
+    assert bornes_dates((date(2026, 10, 12), date(2026, 10, 14)), jour) == (date(2026, 10, 12), date(2026, 10, 14), True)
+    assert bornes_dates((date(2026, 1, 1), date(2026, 12, 31)), jour) == (jour, date(2026, 11, 8), True)       # année entière : seule la fenêtre de l'API borne
+    assert bornes_dates((date(2026, 12, 20), date(2026, 12, 22)), jour) == (jour, date(2026, 11, 8), False)    # après la fenêtre de l'API
+
+
+def test_heures_grisees_et_retour_une_heure_apres():
+    from datetime import date, datetime
+    from lib.itineraire import options_heures, retour_minimum, retour_invalide
+    maintenant = datetime(2026, 10, 9, 15, 10)
+    grisees = [o["value"] for o in options_heures(date(2026, 10, 9), maintenant) if o["disabled"]]
+    assert grisees[0] == "05:00" and grisees[-1] == "15:00" and "16:00" not in grisees
+    assert not any(o["disabled"] for o in options_heures(date(2026, 10, 10), maintenant))
+    aller = datetime(2026, 10, 9, 16, 0)
+    assert retour_minimum(aller) == datetime(2026, 10, 9, 17, 0)
+    assert "1 h" in retour_invalide(aller, datetime(2026, 10, 9, 16, 0))
+    assert retour_invalide(aller, datetime(2026, 10, 9, 17, 0)) is None
+
+
+def test_ville_comme_destination(tmp_path):
+    from sqlalchemy import create_engine, text
+    from lib.itineraire import chercher_destinations, _lieu
+    moteur = create_engine(f"sqlite:///{tmp_path / 'v.db'}")
+    with moteur.begin() as c:
+        c.execute(text("CREATE TABLE lieu (id INTEGER, type TEXT, nom TEXT, commune TEXT, departement TEXT, lat REAL, lon REAL, gare_proche_id INTEGER, distance_gare_km REAL)"))
+        c.execute(text("CREATE TABLE gare (lieu_id INTEGER, code_uic TEXT)"))
+        c.execute(text("INSERT INTO lieu VALUES (1, 'gare', 'Gare de Blois', NULL, NULL, 47.58, 1.34, NULL, NULL), (2, 'culture', 'Château royal', 'Blois', '41', 47.585, 1.335, 1, 0.6)"))
+        c.execute(text("INSERT INTO gare VALUES (1, '87000000')"))
+    villes = [o for o in chercher_destinations("blois", "tous", moteur) if str(o["value"]).startswith("ville:")]
+    assert villes == [{"label": "Blois · ville (41)", "value": "ville:Blois|41", "type": "ville"}]
+    toutes = chercher_destinations("blois", "tous", moteur)
+    assert toutes[0]["type"] == "ville"                              # la ville d'abord, puis ses lieux (même si leur nom ne contient pas la saisie)
+    assert [o["label"] for o in toutes[1:]] == ["Château royal (Blois)"]
+    ville = _lieu(moteur, "ville:Blois|41")
+    assert ville["type"] == "ville" and ville["gare_proche_id"] == 1 and ville["distance_gare_km"] < 1

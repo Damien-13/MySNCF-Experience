@@ -1,10 +1,10 @@
 """Logique de l'onglet « Itinéraire voyageur » du dashboard : du lieu de départ (une gare) à la destination (un lieu de culture, de tourisme
-ou un événement), sans dépendance à Dash.
+un événement, ou une ville), sans dépendance à Dash.
 
 Usage :
     from lib.itineraire import options_gares, chercher_destinations, rechercher
     options_gares()                                          # [{"label": nom, "value": id du lieu}, …]
-    chercher_destinations("chambord", "culture")             # même format, 50 résultats au plus
+    chercher_destinations("chambord", "culture")             # même format, 50 résultats au plus ; les villes (value « ville:Blois|41 ») viennent en tête
     r = rechercher(depart_id, destination_id, quand="2026-10-12 08:00", retour="2026-10-14 18:00")
 
 rechercher() retourne un dict (None si un lieu est inconnu) : depart, destination, gare_arrivee, distance_km (destination → gare la plus proche),
@@ -15,7 +15,7 @@ Rien n'est stocké : l'API Navitia est appelée à chaque recherche (voir lib/na
 """
 import math
 import re
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 
 import pandas as pd
 import sqlalchemy as sa
@@ -31,6 +31,8 @@ RAYON_ALENTOURS_KM = 0.5
 RAYON_POI_KM = 5.0
 MAX_POI = 60            # par catégorie : le dashboard filtre ensuite sans nouvelle recherche
 MAX_TRAJETS = 3
+DELAI_RETOUR = timedelta(hours=1)           # le retour part au moins une heure après l'aller (le temps de trajet sera ajouté plus tard)
+HEURES = range(5, 24)                       # heures proposées dans les menus
 FENETRE_API_JOURS = 30                     # l'API SNCF ne connaît les horaires que ~30 jours en avant
 KM_PAR_DEGRE_LAT = 110.57
 HEURE_DEFAUT = time(8, 0)
@@ -47,23 +49,71 @@ def options_gares(engine=None):
     return [{"label": nom, "value": int(i)} for i, nom in zip(df["id"], df["nom"])]
 
 
+PREFIXE_VILLE = "ville:"                    # value d'une ville dans le menu : « ville:<commune>|<département> » (pas de table des communes : on les déduit des lieux)
+MAX_VILLES = 6
+
+
+def _id_ville(commune, departement):
+    return f"{PREFIXE_VILLE}{commune}|{departement or ''}"
+
+
+def _est_ville(identifiant):
+    return isinstance(identifiant, str) and identifiant.startswith(PREFIXE_VILLE)
+
+
+def _villes(engine, texte):
+    """Communes dont le nom contient `texte` (celles qui commencent par la saisie d'abord, puis les plus riches en lieux) : options du menu."""
+    df = pd.read_sql(sa.text(
+        "SELECT commune, departement, COUNT(*) AS n FROM lieu WHERE type IN ('culture', 'tourisme', 'evenement') "
+        "AND (commune LIKE :texte OR (LENGTH(commune) >= 4 AND :saisie LIKE '%' || commune || '%')) "      # le nom de la commune est dans la saisie : « Alpe d'Huez » → Huez
+        "GROUP BY commune, departement ORDER BY CASE WHEN commune LIKE :debut THEN 0 WHEN commune LIKE :texte THEN 1 ELSE 2 END, n DESC LIMIT :limite"),
+        engine, params={"texte": f"%{texte.strip()}%", "debut": f"{texte.strip()}%", "saisie": texte.strip(), "limite": MAX_VILLES})
+    return [{"label": f"{c} · ville" + (f" ({d})" if d else ""), "value": _id_ville(c, d), "type": "ville"} for c, d in zip(df["commune"], df["departement"])]
+
+
+def _lieu_ville(engine, identifiant):
+    """Une ville vue comme un lieu : position = centre de ses lieux (médiane, pour ne pas être tirée par un point isolé), gare la plus proche."""
+    commune, _, departement = identifiant[len(PREFIXE_VILLE):].partition("|")
+    df = pd.read_sql(sa.text("SELECT lat, lon FROM lieu WHERE commune = :c AND COALESCE(departement, '') = :d AND lat IS NOT NULL AND type IN ('culture', 'tourisme', 'evenement')"),
+                     engine, params={"c": commune, "d": departement})
+    if df.empty:
+        return None
+    lat, lon = float(df["lat"].median()), float(df["lon"].median())
+    gares = pd.read_sql(sa.text("SELECT lieu.id, lieu.lat, lieu.lon FROM lieu JOIN gare ON gare.lieu_id = lieu.id WHERE gare.code_uic IS NOT NULL AND lieu.lat IS NOT NULL"), engine)
+    gares["d"] = (((gares["lat"] - lat) * KM_PAR_DEGRE_LAT) ** 2 + ((gares["lon"] - lon) * 111.32 * math.cos(math.radians(lat))) ** 2) ** 0.5
+    proche = gares.loc[gares["d"].idxmin()] if not gares.empty else None
+    return {"id": identifiant, "type": "ville", "nom": commune, "commune": commune, "lat": lat, "lon": lon, "code_uic": None,
+            "gare_proche_id": int(proche["id"]) if proche is not None else None, "distance_gare_km": float(proche["d"]) if proche is not None else None}
+
+
 def chercher_destinations(texte, categorie="tous", engine=None, inclure=None, limite=50):
     """Lieux de la catégorie dont le nom contient `texte` (au plus `limite`, commune en plus pour distinguer les homonymes).
     `inclure` : id d'un lieu à garder dans la liste (celui déjà choisi), sinon le menu le perd."""
     types = _types(categorie)
-    where, ordre, params = "type IN :types AND nom IS NOT NULL", "nom", {"types": list(types), "limite": limite}
+    moteur = engine or get_engine()
+    villes = _villes(moteur, texte) if texte and len(texte.strip()) >= 2 else []
+    if _est_ville(inclure) and inclure not in {v["value"] for v in villes}:
+        commune, _, dep = inclure[len(PREFIXE_VILLE):].partition("|")
+        villes.insert(0, {"label": f"{commune} · ville" + (f" ({dep})" if dep else ""), "value": inclure, "type": "ville"})
+    ville = (villes[0]["value"][len(PREFIXE_VILLE):].partition("|")[0]) if villes else ""
+    # ordre : la ville d'abord (hors de cette requête), puis les événements de cette ville, les autres événements, puis les autres lieux
+    rang = "(type != 'evenement'), (commune IS NOT :ville)"
+    where, ordre, params = "type IN :types AND nom IS NOT NULL", f"{rang}, nom", {"types": list(types), "limite": limite, "ville": ville}
     if texte and texte.strip():
-        where += " AND nom LIKE :texte"
-        ordre = "nom NOT LIKE :debut, nom"                       # les noms qui commencent par la saisie d'abord
+        where += " AND (nom LIKE :texte OR commune = :ville)"             # le nom contient la saisie, ou le lieu est dans la ville
+        ordre = f"{rang}, nom NOT LIKE :debut, nom"
         params.update(texte=f"%{texte.strip()}%", debut=f"{texte.strip()}%")
-    requete = sa.text(f"SELECT id, nom, commune FROM lieu WHERE {where} ORDER BY {ordre} LIMIT :limite").bindparams(sa.bindparam("types", expanding=True))
-    df = pd.read_sql(requete, engine or get_engine(), params=params)
+    requete = sa.text(f"SELECT id, nom, commune, type FROM lieu WHERE {where} ORDER BY {ordre} LIMIT :limite").bindparams(sa.bindparam("types", expanding=True))
+    df = pd.read_sql(requete, moteur, params=params).drop_duplicates(["nom", "commune"])      # un même lieu est parfois en culture et en tourisme
+    inclure = None if _est_ville(inclure) else inclure
     if inclure is not None and int(inclure) not in set(df["id"]):
-        df = pd.concat([pd.read_sql(sa.text("SELECT id, nom, commune FROM lieu WHERE id = :id"), engine or get_engine(), params={"id": int(inclure)}), df])
-    return [{"label": f"{nom} ({commune})" if commune else nom, "value": int(i)} for i, nom, commune in zip(df["id"], df["nom"], df["commune"])]
+        df = pd.concat([pd.read_sql(sa.text("SELECT id, nom, commune, type FROM lieu WHERE id = :id"), moteur, params={"id": int(inclure)}), df])
+    return villes + [{"label": f"{nom} ({commune})" if commune else nom, "value": int(i), "type": t} for i, nom, commune, t in zip(df["id"], df["nom"], df["commune"], df["type"])]
 
 
 def _lieu(engine, lieu_id):
+    if _est_ville(lieu_id):
+        return _lieu_ville(engine, lieu_id)
     df = pd.read_sql(sa.text(
         "SELECT lieu.id, lieu.type, lieu.nom, lieu.commune, lieu.lat, lieu.lon, lieu.gare_proche_id, lieu.distance_gare_km, gare.code_uic "
         "FROM lieu LEFT JOIN gare ON gare.lieu_id = lieu.id WHERE lieu.id = :id"), engine, params={"id": int(lieu_id)})
@@ -251,6 +301,49 @@ def periode_invalide(quand, maintenant=None):
     return None
 
 
+def retour_invalide(quand, retour, maintenant=None):
+    """Message si le retour part moins d'une heure après l'aller, sinon None."""
+    if retour is not None and retour < retour_minimum(quand, maintenant):
+        return f"Le retour doit partir au moins {int(DELAI_RETOUR.total_seconds() // 3600)} h après l'aller."
+    return None
+
+
+def retour_minimum(quand, maintenant=None):
+    """Premier départ possible pour le retour : une heure après l'aller (`quand`, ou maintenant s'il n'est pas précisé)."""
+    return (quand or maintenant or datetime.now()) + DELAI_RETOUR
+
+
+def options_heures(jour, minimum):
+    """Options du menu d'heures (« 08:00 »…) : celles qui précèdent `minimum` (datetime) sont grisées pour ce `jour` (date ; None = rien de grisé)."""
+    return [{"label": f"{h:02d}:00", "value": f"{h:02d}:00", "disabled": bool(jour and minimum and datetime.combine(jour, time(h)) < minimum)} for h in HEURES]
+
+
+def periode_evenement(engine, lieu_id, aujourdhui=None):
+    """(début, fin) de la prochaine période de l'événement qui a lieu à ce lieu (en cours ou à venir), None si ce n'est pas un événement ou s'il est passé."""
+    if not lieu_id or _est_ville(lieu_id):
+        return None
+    ligne = pd.read_sql(sa.text(
+        "SELECT p.date_debut, p.date_fin FROM evenement_periode p JOIN evenement_lieu l ON l.evenement_id = p.evenement_id "
+        "JOIN lieu ON lieu.id = l.lieu_id WHERE l.lieu_id = :id AND lieu.type = 'evenement' AND p.date_fin >= :jour ORDER BY p.date_debut LIMIT 1"),
+        engine, params={"id": int(lieu_id), "jour": str((aujourdhui or date.today()).isoformat())})
+    if ligne.empty:
+        return None
+    return date.fromisoformat(str(ligne.iloc[0]["date_debut"])[:10]), date.fromisoformat(str(ligne.iloc[0]["date_fin"])[:10])
+
+
+def bornes_dates(periode, aujourdhui=None):
+    """(premier jour, dernier jour, dans_la_fenêtre) du calendrier de l'aller : de aujourd'hui à 30 jours, réduit à la période de l'événement.
+    Si l'événement commence après la fenêtre de l'API, le calendrier reste complet et dans_la_fenêtre est faux."""
+    jour = aujourdhui or date.today()
+    mini, maxi = jour, jour + timedelta(days=FENETRE_API_JOURS)
+    if periode:
+        debut, fin = max(mini, periode[0]), min(maxi, periode[1])
+        if debut <= fin:
+            return debut, fin, True
+        return mini, maxi, False
+    return mini, maxi, True
+
+
 def rechercher(depart_id, destination_id, quand=None, retour=None, engine=None):
     """Prépare tout l'onglet pour un départ (id d'une gare) et une destination (id d'un lieu) : voir l'en-tête du module."""
     engine = engine or get_engine()
@@ -262,7 +355,7 @@ def rechercher(depart_id, destination_id, quand=None, retour=None, engine=None):
     proches = alentours(engine, gare["lat"], gare["lon"]) if gare else {"velo": 0, "bus": 0}
     resultat = {"depart": depart, "destination": destination, "gare_arrivee": gare, "distance_km": distance, "alentours": proches,
                 "dernier_km": dernier_km(distance, proches), "faisable": None if distance is None else distance <= SEUIL_VELO_BUS_KM,
-                "trajets": [], "trajets_retour": [], "erreur_api": None, "periode_invalide": periode_invalide(quand) or periode_invalide(retour), "meme_gare": gare is not None and gare["id"] == depart["id"],
+                "trajets": [], "trajets_retour": [], "erreur_api": None, "periode_invalide": periode_invalide(quand) or periode_invalide(retour) or retour_invalide(quand, retour), "meme_gare": gare is not None and gare["id"] == depart["id"],
                 "pois": pois_autour(engine, destination["lat"], destination["lon"], "tous")}
     if gare is None or resultat["meme_gare"] or not depart["code_uic"] or not gare["code_uic"]:
         return resultat
