@@ -22,7 +22,7 @@ from lib.downloader import download
 # Sources nécessaires à l'application : le nom court, sans DATASET_ ni _URL (« basilic » pour DATASET_BASILIC_URL du .env).
 # Ce sont celles que lit la transformation (src/transformation/) : en ajouter une avec son étape.
 DATA = ROOT / "data"
-SOURCES = ["gares_voyageurs", "horaires_gares", "basilic", "datatourisme_place", "datatourisme_fma",
+SOURCES = ["gares_voyageurs", "horaires_gares", "basilic", "datatourisme_place", "datatourisme_fma", "festivals",
            "velo_stationnement_osm", "velo_stationnement_gares_centre_val_de_loire", "vls_paris_velib", "vls_lyon_velov",
            "formes_voies_rfn", "formes_lignes_rfn", "horaires_sncf_gtfs", "transilien", "eurostar", "renfe_ave", "trenitalia_france", "idfm",
            *sorted(f"bus_{r}" for r in ["marseille_amp", "toulouse_tisseo", "bordeaux_tbm", "nantes_naolib", "strasbourg_cts", "rennes_star", "lille_ilevia", "nice_lignes_dazur", "rouen_astuce", "toulon_mistral", "angers_irigo", "tours_fil_bleu", "clermont_t2c", "orleans_tao", "dijon_divia", "brest_bibus", "besancon_ginko", "metz_le_met", "reims_grand_reims", "saint_etienne_stas", "montpellier_tam"])]

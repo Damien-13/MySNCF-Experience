@@ -82,26 +82,26 @@ def nettoyer(df):
     return ev, plages[["evenement", "date_debut", "date_fin"]]
 
 
-def charger(evenements, plages, engine=None):
-    """Remplace en une transaction les événements de la source (evenement, evenement_lieu, evenement_periode, lieu).
+def charger(evenements, plages, source=SOURCE, engine=None):
+    """Remplace en une transaction les événements de `source` (evenement, evenement_lieu, evenement_periode, lieu).
     `evenements` doit déjà avoir gare_proche_id et distance_gare_km. Retourne (nb événements, nb périodes)."""
     engine = engine or get_engine()
     with engine.begin() as conn:
-        anciens = sa.select(Evenement.id).where(Evenement.source == SOURCE)
-        anciens_lieux = sa.select(Lieu.id).where(Lieu.type == "evenement", Lieu.source == SOURCE)
+        anciens = sa.select(Evenement.id).where(Evenement.source == source)
+        anciens_lieux = sa.select(Lieu.id).where(Lieu.type == "evenement", Lieu.source == source)
         conn.execute(sa.delete(EvenementPeriode).where(EvenementPeriode.evenement_id.in_(anciens)))
         conn.execute(sa.delete(EvenementLieu).where(EvenementLieu.evenement_id.in_(anciens)))
-        conn.execute(sa.delete(Evenement).where(Evenement.source == SOURCE))
+        conn.execute(sa.delete(Evenement).where(Evenement.source == source))
         conn.execute(sa.delete(EvenementLieu).where(EvenementLieu.lieu_id.in_(anciens_lieux)))
-        conn.execute(sa.delete(Lieu).where(Lieu.type == "evenement", Lieu.source == SOURCE))
+        conn.execute(sa.delete(Lieu).where(Lieu.type == "evenement", Lieu.source == source))
 
         premier_lieu = (conn.scalar(sa.select(sa.func.max(Lieu.id))) or 0) + 1
         premier_ev = (conn.scalar(sa.select(sa.func.max(Evenement.id))) or 0) + 1
         n = len(evenements)
         lieux = evenements.drop(columns="categorie").assign(id=range(premier_lieu, premier_lieu + n))
-        inserer(conn, Lieu, lignes_lieu(lieux, "evenement", SOURCE))
+        inserer(conn, Lieu, lignes_lieu(lieux, "evenement", source))
         ids_ev = pd.Series(range(premier_ev, premier_ev + n))
-        inserer(conn, Evenement, [{"id": int(i), "source": SOURCE, "nom": nom, "categorie": cat}
+        inserer(conn, Evenement, [{"id": int(i), "source": source, "nom": nom, "categorie": cat}
                                   for i, nom, cat in zip(ids_ev, evenements["nom"], evenements["categorie"])])
         inserer(conn, EvenementLieu, [{"evenement_id": int(e), "lieu_id": int(l)} for e, l in zip(ids_ev, lieux["id"])])
         inserer(conn, EvenementPeriode, [{"evenement_id": int(ids_ev[p.evenement]), "date_debut": p.date_debut, "date_fin": p.date_fin}
