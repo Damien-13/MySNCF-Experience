@@ -42,7 +42,7 @@ def test_suivre_place_le_train_selon_le_temps_ecoule():
 def test_un_retard_decale_l_arrivee_et_ralentit_le_train():
     en_retard = {**TRAIN, "arrivee": "2026-10-12 09:30:00", "retard_min": 30}                          # l'API annonce 30 min de retard : l'arrivée est repoussée
     retarde = suivi.suivre([en_retard], HEURE + timedelta(minutes=30))
-    assert retarde["trains"][0]["avancement"] == pytest.approx(1 / 3)                                   # 30 min sur 90 au lieu de 30 sur 60
+    assert retarde["trains"][0]["avancement"] == pytest.approx(1 / 3, abs=0.005)                        # 30 min sur 90 au lieu de 30 sur 60
     assert "retard de 30 min" in retarde["message"]
 
 
@@ -53,6 +53,34 @@ def test_suivre_avant_pendant_la_correspondance_et_apres():
     assert entre["trains"] == [] and "Correspondance" in entre["message"]
     assert "terminé" in suivi.suivre([TRAIN, CAR], datetime(2026, 10, 12, 11, 0))["message"]
     assert suivi.suivre([MARCHE], HEURE)["trains"] == []                                                # à pied : pas de train
+
+
+def test_profil_de_vitesse_accelere_croise_puis_freine():
+    etat = suivi.profil(distance_m=20000, duree_s=600, acceleration=0.5)         # 20 km en 10 min : environ 120 km/h de croisière
+    assert etat(0) == (0.0, 0.0)                                                   # à quai au départ
+    assert etat(600)[0] == pytest.approx(20000) and etat(600)[1] == pytest.approx(0, abs=1e-6)       # à l'arrêt à l'arrivée, après tout le trajet
+    assert etat(300)[0] == pytest.approx(10000)                                    # à mi-temps, à mi-chemin (profil symétrique)
+    croisiere = etat(300)[1]
+    assert croisiere == pytest.approx(38.2, abs=0.1) and croisiere > 20000 / 600                  # un peu au-dessus de la moyenne (33,3 m/s) : il faut rattraper l'accélération et le freinage
+    vitesses = [etat(t)[1] for t in range(0, 601, 10)]
+    assert max(vitesses) == pytest.approx(croisiere) and vitesses[1] < vitesses[3] < vitesses[10]   # elle monte au démarrage…
+    assert vitesses[-2] < vitesses[-4] < vitesses[-11]                                              # … et redescend avant l'arrivée
+    parcouru = [etat(t)[0] for t in range(0, 601, 10)]
+    assert all(a <= b for a, b in zip(parcouru, parcouru[1:]))                                      # le train ne recule jamais
+
+
+def test_profil_trop_serre_devient_triangulaire():
+    etat = suivi.profil(distance_m=20000, duree_s=250, acceleration=0.1)           # horaire impossible avec 0,1 m/s² : on accélère plus fort
+    assert etat(250)[0] == pytest.approx(20000)
+    assert etat(125)[1] == pytest.approx(2 * 20000 / 250, rel=1e-6)               # pic au milieu : le double de la vitesse moyenne
+
+
+def test_suivre_donne_la_vitesse_et_la_distance_restante():
+    etat = suivi.suivre([TRAIN], HEURE + timedelta(minutes=30))
+    train = etat["trains"][0]
+    assert train["vitesse_kmh"] > 0 and 10 < train["reste_km"] < 12 and "km/h" in etat["message"] and "il reste" in etat["message"]
+    debut = suivi.suivre([TRAIN], HEURE)["trains"][0]
+    assert debut["vitesse_kmh"] == 0                                               # à quai à l'instant du départ
 
 
 def test_horloge_simulee_accelere_le_temps():

@@ -183,6 +183,8 @@ app.layout = dbc.Container(id="main-container", style={"backgroundColor": init_c
     dcc.Store(id="store-js"),
     dcc.Store(id="store-tous", data={"actif": False, "trains": []}),
     dcc.Store(id="store-js-tous"),
+    dcc.Store(id="store-pas"),
+    dcc.Store(id="store-js-pas"),
     dcc.Interval(id="tick-tous", interval=120_000),
     dcc.Interval(id="tick", interval=1000),
     
@@ -494,15 +496,26 @@ def _trait(points, style, epaisseur):
                         lineCap="round" if style["cle"] in ("rer", "bus", "pied") else "butt")
     return [trait] if pointille else [dl.Polyline(positions=points, color="white", weight=epaisseur + 4, opacity=0.9), trait]
 
+def _legende_dernier_km(r):
+    """Ce que montre le trait entre la gare d'arrivée et la destination : mode conseillé, avec le même motif que sur la carte."""
+    if not r["gare_arrivee"] or r["distance_km"] is None:
+        return []
+    mode = r["dernier_km"][0]
+    style = style_dernier_km(mode)
+    signe = html.I(className="fa-solid fa-shoe-prints me-2") if mode == "Marche à pied" else _echantillon(style["couleur"], style["tirets"])
+    return [html.Span([signe, f"Dernier km à faire : {mode.lower()} ({r['distance_km']:.1f} km depuis la gare)"], className="d-block mt-1", style={"fontSize": "0.85rem"})]
+
+
 def _calques(r, traces, categorie):
     """(lignes, cercle, repères) de la carte : un trait par train (liseré blanc dessous), dernier kilomètre en pointillés, lieux de la catégorie autour de la destination."""
     dep, dest, gare = r["depart"], r["destination"], r["gare_arrivee"]
     lignes = []
     for t in traces:
-        lignes += _trait(t["points"], t["style"], 3 if t["marche"] else 5)
+        if not t["marche"]:                                  # la marche est dessinée en empreintes de pas par trains.js (store-pas)
+            lignes += _trait(t["points"], t["style"], 5)
     reperes = [dl.Marker(position=[dep["lat"], dep["lon"]], children=[dl.Tooltip(f"Départ : {dep['nom']}")]),
                dl.Marker(position=[dest["lat"], dest["lon"]], children=[dl.Tooltip(f"Destination : {dest['nom']}")])]
-    if gare:
+    if gare and r["dernier_km"][0] != "Marche à pied":       # à pied : empreintes ; en vélo, bus ou voiture : trait, expliqué dans la légende
         lignes += _trait([[gare["lat"], gare["lon"]], [dest["lat"], dest["lon"]]], style_dernier_km(r["dernier_km"][0]), 4)
         reperes.append(dl.CircleMarker(center=[gare["lat"], gare["lon"]], radius=8, color=CARMILLON, fillOpacity=0.9, children=[dl.Tooltip(f"Gare d'arrivée : {gare['nom']}")]))
     reperes += [dl.DivMarker(position=[p["lat"], p["lon"]], iconOptions=dict(className="poi-pastille", iconSize=[26, 26], iconAnchor=[13, 13],
@@ -572,7 +585,7 @@ def choisir_option(clics, sens, selection):
     [Output("options-trajets", "children"), Output("results-title", "children"), Output("poi-legend", "children"), Output("col-sens", "style"),
      Output("kpi-statut-detail", "children"),
      Output("map-lines", "children"), Output("map-isochrones", "children"), Output("map-markers", "children"), Output("map", "viewport"),
-     Output("store-etapes", "data")],
+     Output("store-etapes", "data"), Output("store-pas", "data")],
     [Input("store-resultat", "data"), Input("store-selection", "data"), Input("filter-categorie", "value")]
 )
 def afficher_resultat(r, selection, categorie):
@@ -582,7 +595,7 @@ def afficher_resultat(r, selection, categorie):
     nouveau = "store-resultat.data" in ctx.triggered_prop_ids
     cache, visible = {"display": "none"}, {"display": "block"}
     if "message" in r:
-        return _message(r["message"], r["niveau"]), "Trajets proposés", [], cache, "", [], [], [], dash.no_update, None
+        return _message(r["message"], r["niveau"]), "Trajets proposés", [], cache, "", [], [], [], dash.no_update, None, []
 
     dep, gare = r["depart"], r["gare_arrivee"]
     retour = selection["sens"] == "retour" and bool(r["trajets_retour"])
@@ -614,7 +627,11 @@ def afficher_resultat(r, selection, categorie):
         viewport = dict(bounds=[[min(p[0] for p in points), min(p[1] for p in points)], [max(p[0] for p in points), max(p[1] for p in points)]], transition="flyTo")
     for t in traces:                                    # ce dont le navigateur a besoin pour dessiner le train (image, taille réelle)
         t.update(sprites.infos(t["style"]["cle"], t["libelle"]))
-    return blocs, titre, _legende_poi(categorie), visible if r["trajets_retour"] else cache, detail_statut, lignes, cercle, reperes, viewport, traces
+    pas = [t["points"] for t in traces if t["marche"]]  # trajets à pied, dessinés en empreintes de pas
+    if gare and r["dernier_km"][0] == "Marche à pied":
+        pas.append([[gare["lat"], gare["lon"]], [r["destination"]["lat"], r["destination"]["lon"]]])
+    return (blocs, titre, [*_legende_poi(categorie), *_legende_dernier_km(r)], visible if r["trajets_retour"] else cache, detail_statut,
+            lignes, cercle, reperes, viewport, traces, pas)
 
 @app.callback(
     Output("store-horloge", "data", allow_duplicate=True),
@@ -677,6 +694,12 @@ app.clientside_callback(
     [Input("store-etapes", "data"), Input("store-horloge", "data")]
 )
 
+
+app.clientside_callback(
+    ClientsideFunction(namespace="trains", function_name="configurerPas"),
+    Output("store-js-pas", "data"),
+    Input("store-pas", "data")
+)
 
 app.clientside_callback(
     ClientsideFunction(namespace="trains", function_name="configurerTous"),

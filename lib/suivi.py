@@ -1,11 +1,12 @@
 """Position des trains d'un trajet à un instant donné, sans dépendance à Dash.
 
-Un train qui circule entre deux gares est placé sur son tracé selon le temps écoulé depuis son départ : à mi-temps, il est à mi-chemin le long de la voie.
+Un train qui circule entre deux gares est placé sur son tracé selon le temps écoulé depuis son départ, avec un profil réaliste : il accélère, roule à sa vitesse
+de croisière, puis freine (voir profil()). À mi-temps, il est à mi-chemin.
 Les horaires viennent de l'API SNCF en temps réel (retards compris) : un train retardé arrive plus tard, donc avance moins vite sur le même tracé.
 
 Usage :
     suivi = suivre(etapes, maintenant)       # etapes : voir lib.itineraire.tracer_trajet ; maintenant : datetime (heure de Paris)
-    suivi["trains"]    # un dict par train en route : libelle, style, lat, lon, cap (degrés, 0 = nord), avancement (0 à 1), retard_min
+    suivi["trains"]    # un dict par train en route : libelle, style, lat, lon, cap (degrés, 0 = nord), avancement (0 à 1), retard_min, vitesse_kmh, reste_km
     suivi["message"]   # « TGV INOUI 6106 : 42 % du parcours », « part à 07:14 », « Trajet terminé »…
     horloge_simulee(depart, t0_reel, maintenant, vitesse)   # heure simulée : le trajet défile à `vitesse` fois la vitesse réelle
 """
@@ -15,6 +16,7 @@ from datetime import datetime, timedelta
 from lib.reseau_ferre import longueur_km
 
 VITESSE_SIMULATION = 120          # 1 seconde réelle = 2 minutes de trajet
+ACCELERATION_PAR_DEFAUT = 0.7     # m/s²
 
 
 def _lonlat(point):
@@ -53,6 +55,28 @@ def horloge_simulee(depart, t0_reel, maintenant, vitesse=VITESSE_SIMULATION):
     return depart + timedelta(seconds=(maintenant - t0_reel).total_seconds() * vitesse)
 
 
+def profil(distance_m, duree_s, acceleration=ACCELERATION_PAR_DEFAUT):
+    """Mouvement entre deux gares : le train accélère, roule à sa vitesse de croisière, puis freine, de façon à parcourir `distance_m` en `duree_s`.
+    Retourne une fonction t (secondes depuis le départ) → (distance parcourue en m, vitesse en m/s). Même calcul que src/assets/trains.js.
+    Si l'horaire est trop serré pour l'accélération donnée, elle est augmentée (profil triangulaire : accélération puis freinage, sans croisière)."""
+    duree_s = max(duree_s, 1.0)
+    a = acceleration
+    if a * a * duree_s ** 2 < 4 * a * distance_m:
+        a = 4 * distance_m / duree_s ** 2
+    vc = (a * duree_s - math.sqrt(max(a * a * duree_s ** 2 - 4 * a * distance_m, 0.0))) / 2
+    ta = vc / a if a > 0 else 0.0
+
+    def etat(t):
+        t = min(max(t, 0.0), duree_s)
+        if t < ta:
+            return 0.5 * a * t * t, a * t
+        if t > duree_s - ta:
+            u = duree_s - t
+            return distance_m - 0.5 * a * u * u, a * u
+        return 0.5 * a * ta * ta + vc * (t - ta), vc
+    return etat
+
+
 def _heure(t):
     return t.strftime("%H:%M")
 
@@ -66,11 +90,15 @@ def suivre(etapes, maintenant):
     for e in sorted(trains, key=lambda e: e["depart"]):
         depart, arrivee = datetime.fromisoformat(e["depart"]), datetime.fromisoformat(e["arrivee"])
         if depart <= maintenant <= arrivee and arrivee > depart:
-            avancement = (maintenant - depart) / (arrivee - depart)
+            distance_m = _cumul(e["points"])[-1] * 1000
+            parcouru, vitesse = profil(distance_m, (arrivee - depart).total_seconds(), e.get("acc") or ACCELERATION_PAR_DEFAUT)((maintenant - depart).total_seconds())
+            avancement = parcouru / distance_m if distance_m > 0 else 1.0
             lat, lon, cap = point_a(e["points"], avancement)
             retard = e.get("retard_min") or 0
-            en_route.append({"libelle": e["libelle"], "style": e["style"], "lat": lat, "lon": lon, "cap": cap, "avancement": avancement, "retard_min": retard})
-            message = f"{e['libelle']} : {round(avancement * 100)} % du parcours" + (f" · retard de {retard} min" if retard else " · à l'heure")
+            en_route.append({"libelle": e["libelle"], "style": e["style"], "lat": lat, "lon": lon, "cap": cap, "avancement": avancement, "retard_min": retard,
+                             "vitesse_kmh": vitesse * 3.6, "reste_km": (distance_m - parcouru) / 1000})
+            message = (f"{e['libelle']} : {round(avancement * 100)} % du parcours · {round(vitesse * 3.6)} km/h · il reste {(distance_m - parcouru) / 1000:.0f} km"
+                       + (f" · retard de {retard} min" if retard else " · à l'heure"))
     if en_route:
         return {"trains": en_route, "message": message}
     premier = min(datetime.fromisoformat(e["depart"]) for e in trains)

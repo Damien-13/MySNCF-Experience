@@ -32,6 +32,9 @@ IMAGES = {
 # Longueur réelle d'une rame en mètres : l'image du train est affichée à cette échelle sur la carte (elle grandit quand on zoome).
 LONGUEURS_M = {"inoui": 200, "ouigo": 200, "renfe": 200, "trenitalia": 200, "ter": 100, "rer": 110, "transilien": 100}
 LONGUEUR_PAR_DEFAUT_M = 100
+# Accélération typique en m/s² : un TGV démarre doucement, un RER ou un Transilien beaucoup plus vite (elle règle le profil de vitesse entre deux gares).
+ACCELERATIONS = {"inoui": 0.5, "ouigo": 0.5, "renfe": 0.5, "trenitalia": 0.5, "ter": 0.8, "rer": 1.0, "transilien": 1.0}
+ACCELERATION_PAR_DEFAUT = 0.7
 # Services sans image : on prend la plus proche (un Intercités ressemble à un TER, les autres trains à grande vitesse à un INOUI).
 REPLI = {"intercites": "ter", "eurostar": "inoui", "international": "inoui", "inconnu": "inoui"}
 
@@ -46,9 +49,10 @@ def cle_sprite(cle_style, libelle=""):
 
 
 def infos(cle_style, libelle=""):
-    """Ce dont le navigateur a besoin pour afficher un train : {"sprite": clé de l'image ou None, "longueur_m", "rapport" (largeur / hauteur de l'image)}."""
+    """Ce dont le navigateur a besoin pour afficher un train : {"sprite": clé de l'image ou None, "longueur_m", "rapport" (largeur / hauteur de l'image), "acc" (accélération en m/s²)}."""
     cle = cle_sprite(cle_style, libelle)
-    return {"sprite": cle, "longueur_m": LONGUEURS_M.get(cle, LONGUEUR_PAR_DEFAUT_M) if cle else 12, "rapport": largeur_sur_hauteur(cle) if cle else 1.0}
+    return {"sprite": cle, "longueur_m": LONGUEURS_M.get(cle, LONGUEUR_PAR_DEFAUT_M) if cle else 12, "rapport": largeur_sur_hauteur(cle) if cle else 1.0,
+            "acc": ACCELERATIONS.get(cle, ACCELERATION_PAR_DEFAUT) if cle else 0.9}
 
 
 def _normal(nom):
