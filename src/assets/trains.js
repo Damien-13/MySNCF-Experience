@@ -387,6 +387,19 @@
         if (S.horloge.mode === "sim") setTimeout(recentrer, 150);   // simulation lancée : comme un clic sur le train
         return Date.now();
       },
+      /** Onglet Itinéraire affiché : la carte, créée dans un onglet caché, recalcule sa taille sans perdre son centre. */
+      afficherOnglet: function (onglet) {
+        if (onglet === "tab-1") {
+          setTimeout(() => {
+            const carte = trouverCarte();
+            if (!carte) return;
+            const centre = carte.getCenter(), zoom = carte.getZoom();
+            carte.invalidateSize({ pan: false });
+            carte.setView(centre, zoom, { animate: false });
+          }, 50);
+        }
+        return Date.now();
+      },
       /** Bouton « Recentrer » : la carte se place sur le train du trajet choisi. */
       recentrer: function (clics) {
         if (clics) recentrer();
