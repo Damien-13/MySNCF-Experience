@@ -15,7 +15,7 @@ Rien n'est stocké : l'API Navitia est appelée à chaque recherche (voir lib/na
 """
 import math
 import re
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 
 import pandas as pd
 import sqlalchemy as sa
@@ -31,6 +31,7 @@ RAYON_ALENTOURS_KM = 0.5
 RAYON_POI_KM = 5.0
 MAX_POI = 60            # par catégorie : le dashboard filtre ensuite sans nouvelle recherche
 MAX_TRAJETS = 3
+FENETRE_API_JOURS = 30                     # l'API SNCF ne connaît les horaires que ~30 jours en avant
 KM_PAR_DEGRE_LAT = 110.57
 HEURE_DEFAUT = time(8, 0)
 TYPES_POI = {"tous": ("tourisme", "culture", "evenement"), "culture": ("culture",), "tourisme": ("tourisme",), "evenement": ("evenement",)}
@@ -172,8 +173,8 @@ def style_ligne(section):
 
 # Étiquettes des options d'un trajet, comme dans Waze : (texte, icône Font Awesome, couleur, valeur à minimiser).
 CRITERES_ETIQUETTES = (
-    ("Le plus rapide", "fa-bolt", "#0072b2", lambda t: t.get("duree_s")),
-    ("Le plus écologique", "fa-leaf", "#2e7d32", lambda t: t.get("co2_g")),
+    ("Le plus rapide", "fa-bolt", "#0072b2", lambda t: round(t["duree_s"] / 60) if t.get("duree_s") is not None else None),      # à la minute affichée
+    ("Le plus écologique", "fa-leaf", "#2e7d32", lambda t: round(t["co2_g"] / 100) if t.get("co2_g") is not None else None),   # à 0,1 kg affiché
     ("Le moins de correspondances", "fa-route", "#d55e00", lambda t: t.get("correspondances")),
 )
 
@@ -238,6 +239,18 @@ def tracer_trajet(trajet, reseau, depart, arrivee):
     return etapes
 
 
+def periode_invalide(quand, maintenant=None):
+    """Message si `quand` est déjà passé ou hors de la fenêtre de l'API (aucun train n'est alors affiché), sinon None. Tolérance : la minute en cours."""
+    maintenant = maintenant or datetime.now()
+    if quand is None:
+        return None
+    if quand < maintenant.replace(second=0, microsecond=0):
+        return f"Ce départ ({quand:%d/%m à %H:%M}) est déjà passé : choisissez un horaire à partir de maintenant."
+    if quand > maintenant + timedelta(days=FENETRE_API_JOURS):
+        return f"L'API SNCF ne couvre que les {FENETRE_API_JOURS} prochains jours."
+    return None
+
+
 def rechercher(depart_id, destination_id, quand=None, retour=None, engine=None):
     """Prépare tout l'onglet pour un départ (id d'une gare) et une destination (id d'un lieu) : voir l'en-tête du module."""
     engine = engine or get_engine()
@@ -249,9 +262,11 @@ def rechercher(depart_id, destination_id, quand=None, retour=None, engine=None):
     proches = alentours(engine, gare["lat"], gare["lon"]) if gare else {"velo": 0, "bus": 0}
     resultat = {"depart": depart, "destination": destination, "gare_arrivee": gare, "distance_km": distance, "alentours": proches,
                 "dernier_km": dernier_km(distance, proches), "faisable": None if distance is None else distance <= SEUIL_VELO_BUS_KM,
-                "trajets": [], "trajets_retour": [], "erreur_api": None, "meme_gare": gare is not None and gare["id"] == depart["id"],
+                "trajets": [], "trajets_retour": [], "erreur_api": None, "periode_invalide": periode_invalide(quand) or periode_invalide(retour), "meme_gare": gare is not None and gare["id"] == depart["id"],
                 "pois": pois_autour(engine, destination["lat"], destination["lon"], "tous")}
     if gare is None or resultat["meme_gare"] or not depart["code_uic"] or not gare["code_uic"]:
+        return resultat
+    if resultat["periode_invalide"]:
         return resultat
     try:
         resultat["trajets"] = navitia.itineraires(navitia.id_gare(depart["code_uic"]), navitia.id_gare(gare["code_uic"]), quand=quand, nombre=MAX_TRAJETS)

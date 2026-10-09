@@ -17,9 +17,8 @@
  * C'est toujours son image. Seuls les trains du trajet choisi (ou simulé) ne descendent jamais sous LONGUEUR_MIN_PX, pour rester visibles ;
  * les trains « tous réseaux » rapetissent presque à l'échelle exacte (plancher de LONGUEUR_MIN_TOUS_PX).
  *
- * Clic sur un train (une zone de clic plus large que l'image, pour viser un train vu de loin) : zoom sur lui, fenêtre d'informations
- * (vitesse, distance restante), et la caméra le suit : d'une gare à la suivante, à quai pendant l'arrêt, et d'un train au suivant
- * pour un trajet avec correspondance. Elle s'arrête à la fermeture de la fenêtre ou quand on déplace la carte à la main.
+ * Clic sur un train (une zone de clic plus large que l'image, pour viser un train vu de loin) : fenêtre d'informations (vitesse, distance restante).
+ * Le bouton « Recentrer » (et le lancement de la simulation) fait comme un clic sur le train du trajet choisi, en temps réel ou simulé : zoom, fenêtre, caméra qui suit.
  */
 (function () {
   const VITESSE_SIM = 120;           // 1 seconde réelle = 2 minutes de trajet, comme lib/suivi.py
@@ -31,6 +30,7 @@
   const LISSAGE_CAP_M = 60;          // le cap du train est calculé sur ± cette distance : les virages tournent progressivement
   const PAS_TOUS_MS = 200;           // les trains « tous réseaux » sont recalculés 5 fois par seconde (il y en a des milliers)
   const PAS_POPUP_MS = 250;          // la fenêtre d'informations est remise à jour 4 fois par seconde
+  const HAUTEUR_FENETRE_PX = 190;    // place à garder au-dessus du train pour sa fenêtre d'informations
   const PATIENCE_SUIVI_MS = 6000;    // temps pendant lequel on garde la caméra sur un train qui n'est plus dans les données (rafraîchissement en cours)
   const PAS_EMPREINTE_PX = 30;       // distance à l'écran entre deux foulées (l'icône d'empreintes montre déjà le pied gauche et le pied droit)
   const ANGLE_EMPREINTE = 0;         // l'icône d'empreintes de Font Awesome pointe vers l'est : on la tourne de l'angle du chemin
@@ -66,7 +66,7 @@
       S.sel = {}; S.tousMarq = {}; S.suivi = null;
       S.couchePas = null;
       if (trouvee) {
-        trouvee.on("dragstart", () => { S.suivi = null; });
+        trouvee.on("dragstart", () => { S.suivi = null; });         // on déplace la carte à la main : la caméra lâche le train
         trouvee.on("zoomend moveend", dessinerPas);       // les empreintes sont espacées en pixels : on les refait quand l'échelle ou la vue change
       }
     }
@@ -168,7 +168,7 @@
     return clef.startsWith("sel:") ? S.sel[clef] : S.tousMarq[clef];
   }
 
-  /** Clic sur un train : zoom dessus (sans trop zoomer), fenêtre d'informations, puis la caméra le suit. */
+  /** Clic sur un train (ou bouton « Recentrer ») : zoom dessus sans dézoomer, fenêtre d'informations, puis la caméra le suit. */
   function suivre(clef, marqueur) {
     const e = donneesDe(clef);
     if (!e) return;
@@ -177,26 +177,28 @@
     marqueur.setPopupContent(contenu(e, maintenant()));
     marqueur.openPopup();
     S.pauseSuivi = performance.now() + 900;          // pendant le zoom animé, la caméra ne tire pas dans l'autre sens
-    carte.flyTo(marqueur.getLatLng(), Math.max(carte.getZoom(), ZOOM_SUIVI), { duration: 0.8 });
+    allerA(marqueur.getLatLng(), Math.max(carte.getZoom(), ZOOM_SUIVI));
+  }
+
+  /** Vol animé vers un point, placé à l'endroit voulu de l'écran (voir decalageCible). */
+  function allerA(ll, zoom) {
+    const carte = S.carte;
+    carte.flyTo(carte.unproject(carte.project(ll, zoom).subtract(decalageCible(carte)), zoom), zoom, { duration: 0.8 });
   }
 
   function contenu(e, t) {
     const arret = !!e._arret;
     const et = arret ? { v: 0, reste: 0, f: 1 } : etat(e, t);
     const kmh = Math.round(et.v * 3.6), reste = et.reste / 1000;
-    const retard = e.retard_min ? `<div style="color:#c0392b"><b>Retard annoncé : ${e.retard_min} min</b></div>` : "<div>À l'heure</div>";
+    const retard = e.retard_min ? ` · <span style="color:#c0392b"><b>+${e.retard_min} min</b></span>` : "";
     const situation = arret
-      ? `<div class="vitesse">À l'arrêt à ${e.vers || "la gare"}${e._repart ? " · repart à " + heure(e._repart) : ""}</div>`
-      : `<div class="vitesse"><b>${kmh} km/h</b> · il reste ${reste.toFixed(reste < 10 ? 1 : 0)} km${e.vers ? " jusqu'à " + e.vers : ""}</div>`;
+      ? `<div class="vitesse">À l'arrêt${e.vers ? " à " + e.vers : ""}${e._repart ? " · repart à " + heure(e._repart) : ""}</div>`
+      : `<div class="vitesse"><b>${kmh} km/h</b> · ${reste.toFixed(reste < 10 ? 1 : 0)} km restants</div>`;
     return `<div class="infos-train"><div class="titre"><span class="puce" style="background:${e.style.couleur}"></span>${e.libelle}</div>`
-      + `<div class="service">${e.style.libelle}</div>`
       + (e.de ? `<div>${e.de} → ${e.vers}</div>` : "")
-      + `<div>Départ ${heure(e.t0)} · Arrivée ${heure(e.t1)}</div>${retard}`
+      + `<div>${heure(e.t0)} → ${heure(e.t1)}${retard}</div>`
       + situation
-      + (e.sur_voie === false ? `<div class="astuce">Tracé approximatif : ligne droite entre les gares (pas de voie trouvée).</div>` : "")
-      + `<div class="barre"><div style="width:${(et.f * 100).toFixed(1)}%;background:${e.style.couleur}"></div></div>`
-      + `<div>${Math.round(et.f * 100)} % du parcours</div>`
-      + `<div class="astuce">La caméra suit ce train. Faites glisser la carte pour arrêter.</div></div>`;
+      + `<div class="barre"><div style="width:${(et.f * 100).toFixed(1)}%;background:${e.style.couleur}"></div></div></div>`;
   }
 
   // Taille d'un repère à l'échelle de la carte : sa longueur réelle en mètres divisée par les mètres que représente un pixel.
@@ -262,19 +264,13 @@
       Object.keys(S.tousMarq).forEach((k) => retirer(S.tousMarq, k));
     }
 
-    // 3. Caméra : elle suit le train cliqué
+    // 3. Fenêtre d'informations du train cliqué : remise à jour en continu
     if (S.suivi) {
       const e = donneesDe(S.suivi), marq = repereDe(S.suivi);
       if (e && e._pos && marq) {
         S.perdu = null;
         if (performance.now() >= S.pauseSuivi) {
-          // le train reste dans la partie de la carte que le panneau de recherche ne cache pas
-          // (à droite du panneau de recherche, au-dessus du panneau des trajets quand il est ouvert)
-          const panneau = document.getElementById("search-panel"), trajets = document.getElementById("panneau-resultats");
-          const dx = panneau && carte.getSize().x > 700 ? (panneau.offsetWidth + 40) / 2 : 0;
-          const dy = trajets && trajets.offsetParent !== null ? -(trajets.offsetHeight + 16) / 2 : 0;
-          const cible = carte.getSize().divideBy(2).add([dx, dy]);
-          const decalage = carte.latLngToContainerPoint([e._pos.lat, e._pos.lon]).subtract(cible);
+          const decalage = carte.latLngToContainerPoint([e._pos.lat, e._pos.lon]).subtract(carte.getSize().divideBy(2).add(decalageCible(carte)));
           if (Math.abs(decalage.x) + Math.abs(decalage.y) > 0.5) carte.panBy(decalage, { animate: false });
         }
         if (marq.isPopupOpen() && performance.now() - S.dernierPopup >= PAS_POPUP_MS) {
@@ -282,11 +278,39 @@
           marq.setPopupContent(contenu(e, t));
         }
       } else {
-        // le train n'est plus dans les données (liste rafraîchie, ou train qui n'est pas encore reparti) : on patiente avant de lâcher la caméra
+        // le train n'est plus dans les données (liste rafraîchie, ou train qui n'est pas encore reparti) : on patiente avant de lâcher la fenêtre
         S.perdu = S.perdu || performance.now();
         if (performance.now() - S.perdu > PATIENCE_SUIVI_MS) { S.suivi = null; S.perdu = null; }
       }
     }
+  }
+
+  /** Où placer le train, en pixels par rapport au centre de la carte : entre le panneau de recherche et celui des trajets (à droite), et assez bas
+   * dans la zone libre pour que sa fenêtre d'informations, qui s'ouvre au-dessus de lui, reste entièrement visible. */
+  function decalageCible(carte) {
+    const panneau = document.getElementById("search-panel"), trajets = document.getElementById("panneau-resultats");
+    const taille = carte.getSize();
+    const gauche = panneau && taille.x > 700 ? panneau.offsetWidth + 40 : 0;
+    const droite = taille.x - (trajets && trajets.offsetParent !== null ? trajets.offsetWidth + 16 : 0);
+    const y = Math.min(taille.y - 30, Math.max(taille.y / 2, HAUTEUR_FENETRE_PX));
+    return [(gauche + droite) / 2 - taille.x / 2, y - taille.y / 2];
+  }
+
+  /** Le train du trajet choisi à montrer : celui qui roule, sinon le prochain à partir, sinon le dernier. */
+  function trainAMontrer(t) {
+    const idx = S.etapes.map((e, i) => i).filter((i) => !S.etapes[i].marche && S.etapes[i].t0 && S.etapes[i].t1);
+    if (!idx.length) return -1;
+    return idx.find((i) => t >= S.etapes[i].t0 && t <= S.etapes[i].t1) ?? idx.find((i) => S.etapes[i].t0 > t) ?? idx[idx.length - 1];
+  }
+
+  /** Bouton « Recentrer » : comme un clic sur le train du trajet choisi (en temps réel ou simulé). Train pas encore parti : on va à sa gare de départ. */
+  function recentrer() {
+    const carte = trouverCarte(), t = maintenant(), i = trainAMontrer(t);
+    if (!carte || i < 0) return;
+    const e = S.etapes[i], clef = "sel:" + i, marq = S.sel[clef];
+    if (marq && e._pos) { suivre(clef, marq); return; }
+    const p = t < e.t0 ? e.points[0] : e.points[e.points.length - 1];
+    allerA(L.latLng(p[0], p[1]), Math.max(carte.getZoom(), ZOOM_SUIVI));
   }
 
   /** Un train « tous réseaux » : son segment en cours, ou à quai à la fin du précédent si le suivant n'est pas encore parti. */
@@ -360,6 +384,12 @@
         S.etapes = (etapes || []).map(preparer);
         S.horloge = horloge || { mode: "reel" };
         demarrer();
+        if (S.horloge.mode === "sim") setTimeout(recentrer, 150);   // simulation lancée : comme un clic sur le train
+        return Date.now();
+      },
+      /** Bouton « Recentrer » : la carte se place sur le train du trajet choisi. */
+      recentrer: function (clics) {
+        if (clics) recentrer();
         return Date.now();
       },
       /** Trajets à pied du résultat affiché (listes de points [lat, lon]) : dessinés en empreintes de pas. */

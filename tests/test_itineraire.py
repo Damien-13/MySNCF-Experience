@@ -180,3 +180,15 @@ def test_rechercher_meme_gare_ne_appelle_pas_l_api(engine, monkeypatch):
 
 def test_rechercher_lieu_inconnu(engine):
     assert itineraire.rechercher(1, 999, engine=engine) is None
+
+
+def test_periode_invalide():
+    from datetime import datetime
+    from lib.itineraire import periode_invalide
+    maintenant = datetime(2026, 10, 9, 15, 10)
+    assert "déjà passé" in periode_invalide(datetime(2026, 10, 2, 16, 0), maintenant)
+    assert "déjà passé" in periode_invalide(datetime(2026, 10, 9, 14, 0), maintenant)
+    assert periode_invalide(datetime(2026, 10, 9, 15, 10), maintenant) is None
+    assert periode_invalide(datetime(2026, 10, 9, 16, 0), maintenant) is None
+    assert "30" in periode_invalide(datetime(2026, 12, 1, 9, 0), maintenant)
+    assert periode_invalide(None, maintenant) is None
