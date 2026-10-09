@@ -113,6 +113,22 @@ def test_tracer_trajet_un_trace_par_train_et_liaison_directe_sans_trajet():
     assert len(direct) == 1 and direct[0]["libelle"] == "Liaison directe"
 
 
+def test_tracer_trajet_marche_et_dernier_km():
+    reseau = construire_reseau(VOIE)
+    trajet = _trajet((2.0, 48.0), (2.2, 48.0))
+    trajet["sections"].append({"type": "transfer", "mode": "walking", "duree_s": 240, "de_lonlat": (2.2, 48.0), "vers_lonlat": (2.2, 48.002)})
+    trajet["sections"].append({"type": "transfer", "mode": "walking", "duree_s": 8, "de_lonlat": (2.2, 48.0), "vers_lonlat": (2.2, 48.0001)})      # trop court pour être tracé
+    etapes = itineraire.tracer_trajet(trajet, reseau, (2.0, 48.0), (2.2, 48.0))
+    assert [(e["marche"], e["libelle"]) for e in etapes] == [(False, "TGV INOUI 6101"), (True, "À pied · 4 min")]
+    assert etapes[1]["style"]["tirets"] != etapes[0]["style"]["tirets"]                    # un autre motif à pied qu'en train
+    assert {itineraire.style_dernier_km(m)["tirets"] for m in ("Marche à pied", "Vélo / Bus", "Voiture / Taxi")} == {"1 9", "10 7", "18 8"}
+
+
+def test_filtre_culture_ne_garde_que_la_culture(engine):
+    assert set(itineraire.pois_autour(engine, 48.009, 2.2, "culture")["type"]) == {"culture"}
+    assert {o["value"] for o in itineraire.chercher_destinations("", "culture", engine, limite=100)} == {10, 12}
+
+
 def test_rechercher_assemble_tout(engine, monkeypatch):
     appels = []
     monkeypatch.setattr(navitia, "itineraires", lambda a, b, quand=None, nombre=3: appels.append((a, b)) or [_trajet((2.0, 48.0), (2.2, 48.0))])

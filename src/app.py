@@ -46,7 +46,7 @@ import re
 from datetime import date, datetime
 
 from lib.db.connection import get_engine
-from lib.itineraire import RAYON_POI_KM, chercher_destinations, options_gares, quand_depuis, rechercher, tracer_trajet
+from lib.itineraire import RAYON_POI_KM, chercher_destinations, options_gares, quand_depuis, rechercher, style_dernier_km, tracer_trajet
 from lib.reseau_ferre import charger_reseau
 
 # ==============================================================================
@@ -112,6 +112,7 @@ def get_real_data(categorie="tous"):
     try:
         if categorie == "culture": type_filter = "IN ('culture', 'tourisme')"
         elif categorie == "evenement": type_filter = "IN ('evenement')"
+        elif categorie == "tourisme": type_filter = "IN ('tourisme')"
         else: type_filter = "IN ('tourisme', 'culture', 'evenement')"
 
         df_region = pd.read_sql(f"SELECT departement as \"Région\", type as \"Catégorie\", COUNT(id) as \"Nombre\" FROM lieu WHERE type {type_filter} AND departement IS NOT NULL GROUP BY departement, type", engine)
@@ -240,6 +241,7 @@ app.layout = dbc.Container(id="main-container", style={"backgroundColor": init_c
                                             options=[
                                                 {"label": html.Span([html.I(className="fa-solid fa-map-location-dot me-2"), "Toutes"]), "value": "tous"},
                                                 {"label": html.Span([html.I(className="fa-solid fa-landmark me-2"), "Culture"]), "value": "culture"},
+                                                {"label": html.Span([html.I(className="fa-solid fa-camera me-2"), "Tourisme"]), "value": "tourisme"},
                                                 {"label": html.Span([html.I(className="fa-solid fa-masks-theater me-2"), "Festivals"]), "value": "evenement"}
                                             ],
                                             value="tous", className="fw-bold mb-4", style={"fontSize": "0.85rem"}
@@ -411,7 +413,7 @@ def update_ui_and_graphs(theme_values, categorie):
 POI_COULEURS = {"culture": COLORBLIND_PALETTE[0], "tourisme": "#984ea3", "evenement": COLORBLIND_PALETTE[2]}
 POI_LIBELLES = {"culture": "Culture", "tourisme": "Tourisme", "evenement": "Festival / événement"}
 POI_ICONES = {"culture": "fa-landmark", "tourisme": "fa-camera", "evenement": "fa-masks-theater"}
-POI_PAR_CATEGORIE = {"tous": ["tourisme", "culture", "evenement"], "culture": ["culture", "tourisme"], "evenement": ["evenement"]}
+POI_PAR_CATEGORIE = {"tous": ["tourisme", "culture", "evenement"], "culture": ["culture"], "tourisme": ["tourisme"], "evenement": ["evenement"]}
 
 
 def _duree(secondes):
@@ -434,8 +436,8 @@ def _echantillon(couleur, tirets):
 
 def _carte_option(i, trajet, actif, traces):
     """Un bloc cliquable : heures, durée, correspondances, puis un trait + le nom de chaque train."""
-    lignes = [html.Div(className="mb-1", children=[_echantillon(t["style"]["couleur"], t["style"]["tirets"]), html.Span(t["libelle"], className="fw-bold"),
-                                                   html.Span(f" · {t['style']['libelle']}", style={"opacity": 0.7})]) for t in traces]
+    lignes = [html.Div(className="mb-1", children=[_echantillon(t["style"]["couleur"], t["style"]["tirets"]), html.Span(t["libelle"], className="fw-bold" if not t["marche"] else ""),
+                                                   html.Span("" if t["marche"] else f" · {t['style']['libelle']}", style={"opacity": 0.7})]) for t in traces]
     co2 = trajet.get("co2_g")
     return dbc.Col(xs=12, lg=4, className="mb-3", children=html.Div(id={"type": "option", "index": i}, n_clicks=0, role="button", tabIndex=0, children=[
         html.Div([html.Span(f"Option {i + 1}", className="badge me-2", style={"backgroundColor": CARMILLON if actif else "#6c757d"}),
@@ -462,23 +464,26 @@ def _legende_poi(categorie):
                        POI_LIBELLES[t]], className="me-3", style={"fontSize": "0.85rem"})
             for t in POI_PAR_CATEGORIE.get(categorie, POI_PAR_CATEGORIE["tous"])]
 
+def _trait(points, style, epaisseur):
+    """Un trait de la carte : liseré blanc dessous, puis la couleur et le motif du service (petits points à pied, tirets en bus ou en vélo…)."""
+    return [dl.Polyline(positions=points, color="white", weight=epaisseur + 4, opacity=0.9),
+            dl.Polyline(positions=points, color=style["couleur"], weight=epaisseur, dashArray=style["tirets"], lineCap="round" if style["cle"] in ("rer", "bus", "pied") else "butt")]
+
 def _calques(r, traces, categorie):
     """(lignes, cercle, repères) de la carte : un trait par train (liseré blanc dessous), dernier kilomètre en pointillés, lieux de la catégorie autour de la destination."""
     dep, dest, gare = r["depart"], r["destination"], r["gare_arrivee"]
     lignes = []
     for t in traces:
-        lignes.append(dl.Polyline(positions=t["points"], color="white", weight=9, opacity=0.9))
-        lignes.append(dl.Polyline(positions=t["points"], color=t["style"]["couleur"], weight=5, dashArray=t["style"]["tirets"],
-                                  lineCap="round" if t["style"]["cle"] in ("rer", "bus") else "butt"))
+        lignes += _trait(t["points"], t["style"], 3 if t["marche"] else 5)
     reperes = [dl.Marker(position=[dep["lat"], dep["lon"]], children=[dl.Tooltip(f"Départ : {dep['nom']}")]),
                dl.Marker(position=[dest["lat"], dest["lon"]], children=[dl.Tooltip(f"Destination : {dest['nom']}")])]
     if gare:
-        lignes.append(dl.Polyline(positions=[[gare["lat"], gare["lon"]], [dest["lat"], dest["lon"]]], color="#333333", weight=3, dashArray="3 8"))
+        lignes += _trait([[gare["lat"], gare["lon"]], [dest["lat"], dest["lon"]]], style_dernier_km(r["dernier_km"][0]), 4)
         reperes.append(dl.CircleMarker(center=[gare["lat"], gare["lon"]], radius=8, color=CARMILLON, fillOpacity=0.9, children=[dl.Tooltip(f"Gare d'arrivée : {gare['nom']}")]))
     reperes += [dl.DivMarker(position=[p["lat"], p["lon"]], iconOptions=dict(className="poi-pastille", iconSize=[26, 26], iconAnchor=[13, 13],
                                                                              html=f'<div style="{_css(_pastille(p["type"]))}"><i class="fa-solid {POI_ICONES.get(p["type"], "fa-location-dot")}"></i></div>'),
                              children=[dl.Tooltip(f"{p['nom'] or p['type']} · {POI_LIBELLES.get(p['type'], p['type'])} · {p['distance_km']:.1f} km de la destination")])
-                for p in r["pois"]]
+                for p in r["pois"] if p["type"] in POI_PAR_CATEGORIE.get(categorie, POI_PAR_CATEGORIE["tous"])]
     cercle = [dl.Circle(center=[dest["lat"], dest["lon"]], radius=RAYON_POI_KM * 1000, color="#555555", weight=2, fillOpacity=0.05)]
     return lignes, cercle, reperes
 
@@ -493,12 +498,11 @@ def _message(texte, niveau="muted"):
     Input("btn-search", "n_clicks"),
     [State("input-depart", "value"), State("input-arrivee", "value"),
      State("date-picker-aller", "date"), State("time-picker-aller", "value"),
-     State("switch-ar", "value"), State("date-picker-retour", "date"), State("time-picker-retour", "value"),
-     State("filter-categorie", "value")],
+     State("switch-ar", "value"), State("date-picker-retour", "date"), State("time-picker-retour", "value")],
     running=[(Output("btn-search", "disabled"), True, False)],
     prevent_initial_call=True
 )
-def lancer_recherche(n_clicks, depart, arrivee, date_aller, heure_aller, aller_retour, date_retour, heure_retour, categorie):
+def lancer_recherche(n_clicks, depart, arrivee, date_aller, heure_aller, aller_retour, date_retour, heure_retour):
     """Interroge la base et l'API SNCF, puis range le résultat dans store-resultat : l'affichage (trajets, carte) s'en sert sans rappeler l'API."""
     vide = ("-- km", "--", "--", "", "")
     reset = ({"sens": "aller", "index": 0}, "aller")
@@ -507,7 +511,7 @@ def lancer_recherche(n_clicks, depart, arrivee, date_aller, heure_aller, aller_r
     try:
         quand = quand_depuis(date_aller, heure_aller) if date_aller else None
         retour = quand_depuis(date_retour, heure_retour) if aller_retour and 1 in aller_retour and date_retour else None
-        r = rechercher(depart, arrivee, quand=quand, retour=retour, categorie=categorie, engine=engine)
+        r = rechercher(depart, arrivee, quand=quand, retour=retour, engine=engine)
     except Exception as erreur:
         return (*vide, {"message": f"Recherche impossible : {type(erreur).__name__}", "niveau": "danger"}, *reset)
     if r is None:
@@ -517,7 +521,6 @@ def lancer_recherche(n_clicks, depart, arrivee, date_aller, heure_aller, aller_r
     km, gare = r["distance_km"], r["gare_arrivee"]
     statut = "--" if r["faisable"] is None else "Faisable" if r["faisable"] else "Difficile"
     r["pois"] = r["pois"].to_dict("records")
-    r["categorie"] = categorie
     donnees = json.loads(json.dumps(r, default=str))          # datetimes → texte : le résultat voyage dans un dcc.Store
     return (f"{km:.1f} km" if km is not None else "-- km", mode, statut, f"depuis {gare['nom']}" if gare else "", detail_mode, donnees, *reset)
 
@@ -544,9 +547,9 @@ def choisir_option(clics, sens, selection):
     [Output("options-trajets", "children"), Output("results-title", "children"), Output("poi-legend", "children"), Output("col-sens", "style"),
      Output("kpi-statut-detail", "children"),
      Output("map-lines", "children"), Output("map-isochrones", "children"), Output("map-markers", "children"), Output("map", "viewport")],
-    [Input("store-resultat", "data"), Input("store-selection", "data")]
+    [Input("store-resultat", "data"), Input("store-selection", "data"), Input("filter-categorie", "value")]
 )
-def afficher_resultat(r, selection):
+def afficher_resultat(r, selection, categorie):
     """Blocs des options et carte, d'après le résultat de la recherche et l'option choisie."""
     if not r:
         raise PreventUpdate
@@ -576,12 +579,12 @@ def afficher_resultat(r, selection):
 
     co2 = trajets[index].get("co2_g") if trajets else None
     detail_statut = f"Train : {co2 / 1000:.1f} kg CO₂e par voyageur" if co2 else ("Horaires indisponibles" if r["erreur_api"] else "")
-    lignes, cercle, reperes = _calques(r, traces, r["categorie"])
+    lignes, cercle, reperes = _calques(r, traces, categorie)
     viewport = dash.no_update
     if nouveau:
         points = [p for t in traces for p in t["points"]] + [[r["destination"]["lat"], r["destination"]["lon"]]]
         viewport = dict(bounds=[[min(p[0] for p in points), min(p[1] for p in points)], [max(p[0] for p in points), max(p[1] for p in points)]], transition="flyTo")
-    return blocs, titre, _legende_poi(r["categorie"]), visible if r["trajets_retour"] else cache, detail_statut, lignes, cercle, reperes, viewport
+    return blocs, titre, _legende_poi(categorie), visible if r["trajets_retour"] else cache, detail_statut, lignes, cercle, reperes, viewport
 
 if __name__ == "__main__":
     app.run(debug=True)

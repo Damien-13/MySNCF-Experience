@@ -9,7 +9,7 @@ Usage :
 
 rechercher() retourne un dict (None si un lieu est inconnu) : depart, destination, gare_arrivee, distance_km (destination → gare la plus proche),
 alentours (stations vélo et arrêts de bus près de la gare d'arrivée), dernier_km (mode, détail), faisable, trajets (aller, Navitia, jusqu'à 3),
-trajets_retour (idem pour le retour, vide sans date de retour), erreur_api (texte, sinon None), pois (lieux autour de la destination, selon la catégorie).
+trajets_retour (idem pour le retour, vide sans date de retour), erreur_api (texte, sinon None), pois (lieux de toutes les catégories autour de la destination : le dashboard filtre à l'affichage).
 tracer_trajet() dessine un trajet : un tracé collé aux voies par train, avec la couleur et les tirets du service (style_ligne).
 Rien n'est stocké : l'API Navitia est appelée à chaque recherche (voir lib/navitia.py).
 """
@@ -29,11 +29,11 @@ SEUIL_VELO_BUS_KM = 5.0
 VITESSE_MARCHE_M_MIN = 80
 RAYON_ALENTOURS_KM = 0.5
 RAYON_POI_KM = 5.0
-MAX_POI = 150
+MAX_POI = 60            # par catégorie : le dashboard filtre ensuite sans nouvelle recherche
 MAX_TRAJETS = 3
 KM_PAR_DEGRE_LAT = 110.57
 HEURE_DEFAUT = time(8, 0)
-TYPES_POI = {"tous": ("tourisme", "culture", "evenement"), "culture": ("culture", "tourisme"), "evenement": ("evenement",)}
+TYPES_POI = {"tous": ("tourisme", "culture", "evenement"), "culture": ("culture",), "tourisme": ("tourisme",), "evenement": ("evenement",)}
 
 
 def _types(categorie):
@@ -97,7 +97,8 @@ def dernier_km(distance_km, proches):
 
 
 def pois_autour(engine, lat, lon, categorie="tous", rayon_km=RAYON_POI_KM, limite=MAX_POI):
-    """Lieux de la catégorie à moins de `rayon_km` d'une position, les plus proches d'abord : DataFrame id, type, nom, lat, lon, distance_km."""
+    """Lieux de la catégorie à moins de `rayon_km` d'une position, les plus proches d'abord, `limite` au plus par type :
+    DataFrame id, type, nom, lat, lon, distance_km."""
     dlat, dlon = rayon_km / KM_PAR_DEGRE_LAT, rayon_km / (111.32 * math.cos(math.radians(lat)))
     df = pd.read_sql(sa.text(
         "SELECT id, type, nom, lat, lon FROM lieu WHERE type IN :types AND lat BETWEEN :lat1 AND :lat2 AND lon BETWEEN :lon1 AND :lon2").bindparams(
@@ -105,7 +106,8 @@ def pois_autour(engine, lat, lon, categorie="tous", rayon_km=RAYON_POI_KM, limit
         engine, params={"types": list(_types(categorie)), "lat1": lat - dlat, "lat2": lat + dlat, "lon1": lon - dlon, "lon2": lon + dlon})
     df["distance_km"] = ((df["lat"] - lat) * KM_PAR_DEGRE_LAT) ** 2 + ((df["lon"] - lon) * 111.32 * math.cos(math.radians(lat))) ** 2
     df["distance_km"] = df["distance_km"].pow(0.5)
-    return df[df["distance_km"] <= rayon_km].sort_values("distance_km").head(limite).reset_index(drop=True)
+    proches = df[df["distance_km"] <= rayon_km].sort_values("distance_km")
+    return proches.groupby("type").head(limite).sort_values("distance_km").reset_index(drop=True)
 
 
 def quand_depuis(date, heure=None, maintenant=None):
@@ -124,14 +126,18 @@ STYLES = {
     "ouigo": ("OUIGO", "#e6007e", "14 8"),
     "ter": ("TER / régional", "#0072b2", "6 6"),
     "intercites": ("Intercités", "#2e7d32", "14 6 2 6"),
-    "rer": ("RER / Transilien", "#00a3a1", "1 9"),
+    "rer": ("RER / Transilien", "#00a3a1", "3 5"),
     "bus": ("Car / bus", "#e69f00", "2 12"),
     "eurostar": ("Eurostar", "#00205b", "16 5 2 5 2 5"),
     "trenitalia": ("Trenitalia", "#d1232a", "16 5 2 5 2 5"),
     "renfe": ("Renfe AVE", "#7b3294", "16 5 2 5 2 5"),
     "international": ("International", "#4b3c8f", "16 5 2 5 2 5"),
     "inconnu": ("Train", "#555555", None),
+    "pied": ("À pied", "#333333", "1 9"),
+    "velo_bus": ("Vélo / Bus", "#e69f00", "10 7"),
+    "voiture": ("Voiture / Taxi", "#555555", "18 8"),
 }
+DERNIER_KM = {"Marche à pied": "pied", "Vélo / Bus": "velo_bus", "Voiture / Taxi": "voiture"}
 
 
 def style_ligne(section):
@@ -164,22 +170,36 @@ def style_ligne(section):
     return {"cle": cle, "libelle": libelle, "couleur": couleur, "tirets": tirets}
 
 
+def style_dernier_km(mode):
+    """Style du dernier kilomètre selon le mode conseillé (« Marche à pied », « Vélo / Bus », « Voiture / Taxi ») : petits points à pied, tirets en bus ou vélo."""
+    cle = DERNIER_KM.get(mode, "pied")
+    libelle, couleur, tirets = STYLES[cle]
+    return {"cle": cle, "libelle": libelle, "couleur": couleur, "tirets": tirets}
+
+
 def tracer_trajet(trajet, reseau, depart, arrivee):
-    """Un dict par train ou car du trajet : points [[lat, lon], …] collés aux voies, sur_voie, style (style_ligne) et libelle (« TER 880693 »).
-    `depart`, `arrivee` : (lon, lat) des gares, utilisées sans trajet pour tracer la liaison directe."""
-    sections = [s for s in (trajet or {}).get("sections", []) if s["type"] == "public_transport" and s.get("de_lonlat") and s.get("vers_lonlat")]
-    if not sections:
+    """Un dict par étape du trajet, dans l'ordre : points [[lat, lon], …], sur_voie, style (style_ligne), libelle (« TER 880693 »), marche (vrai à pied).
+    Les trains et les cars sont collés aux voies ; une correspondance à pied est un trait droit en petits points.
+    `depart`, `arrivee` : (lon, lat) des gares, utilisées sans train pour tracer la liaison directe."""
+    etapes = []
+    for s in (trajet or {}).get("sections", []):
+        if not (s.get("de_lonlat") and s.get("vers_lonlat")):
+            continue
+        de, vers = tuple(s["de_lonlat"]), tuple(s["vers_lonlat"])
+        if s["type"] == "public_transport":
+            points, ok = chemin(reseau, de, vers)
+            etapes.append({"points": [[lat, lon] for lon, lat in points], "sur_voie": ok, "style": style_ligne(s), "marche": False,
+                           "libelle": f"{s.get('ligne') or 'Train'} {s.get('numero') or ''}".strip()})
+        elif s["type"] in ("transfer", "street_network", "crow_fly") and s.get("mode") == "walking" and s["duree_s"] >= 60 and de != vers:
+            etapes.append({"points": [[de[1], de[0]], [vers[1], vers[0]]], "sur_voie": False, "style": style_dernier_km("Marche à pied"), "marche": True,
+                           "libelle": f"À pied · {round(s['duree_s'] / 60)} min"})
+    if not any(not e["marche"] for e in etapes):
         points, ok = chemin(reseau, depart, arrivee)
-        return [{"points": [[lat, lon] for lon, lat in points], "sur_voie": ok, "style": style_ligne({}), "libelle": "Liaison directe"}]
-    traces = []
-    for s in sections:
-        points, ok = chemin(reseau, tuple(s["de_lonlat"]), tuple(s["vers_lonlat"]))
-        traces.append({"points": [[lat, lon] for lon, lat in points], "sur_voie": ok, "style": style_ligne(s),
-                       "libelle": f"{s.get('ligne') or 'Train'} {s.get('numero') or ''}".strip()})
-    return traces
+        etapes.insert(0, {"points": [[lat, lon] for lon, lat in points], "sur_voie": ok, "style": style_ligne({}), "marche": False, "libelle": "Liaison directe"})
+    return etapes
 
 
-def rechercher(depart_id, destination_id, quand=None, retour=None, categorie="tous", engine=None):
+def rechercher(depart_id, destination_id, quand=None, retour=None, engine=None):
     """Prépare tout l'onglet pour un départ (id d'une gare) et une destination (id d'un lieu) : voir l'en-tête du module."""
     engine = engine or get_engine()
     depart, destination = _lieu(engine, depart_id), _lieu(engine, destination_id)
@@ -191,7 +211,7 @@ def rechercher(depart_id, destination_id, quand=None, retour=None, categorie="to
     resultat = {"depart": depart, "destination": destination, "gare_arrivee": gare, "distance_km": distance, "alentours": proches,
                 "dernier_km": dernier_km(distance, proches), "faisable": None if distance is None else distance <= SEUIL_VELO_BUS_KM,
                 "trajets": [], "trajets_retour": [], "erreur_api": None,
-                "pois": pois_autour(engine, destination["lat"], destination["lon"], categorie)}
+                "pois": pois_autour(engine, destination["lat"], destination["lon"], "tous")}
     if gare is None or not depart["code_uic"] or not gare["code_uic"]:
         return resultat
     try:
