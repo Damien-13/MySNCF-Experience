@@ -1,125 +1,224 @@
-# MySNCF-Experience
+<p align="center">
+  <img src="assets/logo%20MySNCF%20Experience.png" alt="Logo MySNCF Experience" width="140">
+</p>
 
-Description du projet à compléter.
+<h1 align="center">MySNCF Experience</h1>
 
-## Structure
+<p align="center">
+  Aller voir un musée, un site touristique ou un festival en train : trajet, dernier kilomètre et couverture ferroviaire des territoires.
+</p>
 
-```
-src/        code source de l'application
-data/       données (non versionnées)
-lib/        bibliothèques et modules réutilisables (téléchargement ; lib/db : connexion et modèles de la base)
-migrations/ migrations de la base de données (Alembic)
-```
+---
+
+Un dashboard en deux onglets, construit sur les données ouvertes (SNCF, DATAtourisme, transport.data.gouv.fr…) et l'API SNCF :
+
+- **Itinéraire voyageur** : de sa gare à un lieu ou un événement, les trains proposés, le tracé sur les voies, le dernier kilomètre
+  (à pied, vélo, bus) et les trains qui roulent en direct sur la carte.
+- **Analyse de la couverture ferroviaire** : quels sites touristiques sont accessibles sans voiture, par département et par distance à la gare.
+
+![Onglet Itinéraire voyageur](assets/readme/itineraire.jpg)
+
+![Onglet Analyse de la couverture ferroviaire](assets/readme/analyse.jpg)
 
 ## Installation
 
+### 1. Prérequis
+
+- Python 3.11 ou plus récent, et Git.
+- Environ 15 Go d'espace disque libre, dont environ 9 Go pour la base de données une fois les données téléchargées.
+
+### 2. Récupérer le projet
+
+```bash
+git clone https://github.com/Damien-13/MySNCF-Experience.git
+cd MySNCF-Experience
+```
+
+### 3. Créer l'environnement Python
+
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate          # Windows : .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-## Configuration
-
-Copier `.env.example` en `.env` puis renseigner les variables.
-
-## Extraction des données
-
-Déclarer chaque lien dans `.env` (`DATASET_<SOURCE>_URL=...`), puis :
+### 4. Configurer le `.env`
 
 ```bash
-python -c "from lib.downloader import download; download(['basilic'])"
+cp .env.example .env               # Windows : copy .env.example .env
 ```
 
-Chaque lien est téléchargé dans `data/<source>/` (les `.zip` sont décompressés).
+Le `.env.example` contient déjà toutes les sources de données et la base. **Une seule valeur est à renseigner : `NAVITIA_TOKEN`**, tout en haut du fichier.
 
-## Initialisation
+Pour l'obtenir :
+1. Demander une clé gratuite à l'API SNCF : [formulaire d'inscription](https://numerique.sncf.com/startup/api/token-developpeur/)
+   (présentation de l'API sur [numerique.sncf.com/startup/api](https://numerique.sncf.com/startup/api/)).
+2. Récupérer la clé reçue par e-mail.
+3. La coller dans le `.env` : `NAVITIA_TOKEN=votre-clé`.
+
+Le `.env` n'est jamais versionné : le token reste sur votre machine.
+
+### 5. Créer la base et charger les données
 
 ```bash
-python src/initialize.py   # crée la base (SQLite par défaut), télécharge les sources, puis les nettoie et les charge
+python src/initialize.py
 ```
 
-Relançable sans risque : la base déjà à jour n'est pas modifiée, les sources déjà présentes dans `data/<source>/` ne sont pas
-retéléchargées, et la transformation remplace les données de chaque source (environ 2 min 30 pour tout recharger).
-Les sources à télécharger sont la liste `SOURCES` de `src/initialize.py` ; chacune doit avoir son `DATASET_<SOURCE>_URL` dans le `.env`.
+Crée la base (SQLite, `data/mysncf.db`), télécharge les sources dans `data/`, puis les nettoie et les charge.
+Le premier lancement prend plusieurs dizaines de minutes. Relançable sans risque : ce qui est déjà téléchargé ou à jour n'est pas refait.
 
-## Flux temps réel
-
-`lib/flux.py` lit les stations de vélos en libre-service déclarées en `FLUX_<NOM>_URL` dans le `.env` (GBFS v2 et v3). C'est le dashboard
-qui l'appelle à chaque actualisation : rien n'est stocké en base, et la transformation n'y touche pas.
-
-```python
-from lib.flux import lire, lire_tous
-stations, erreurs = lire_tous()   # une ligne par station : flux, station_id, nom, lat, lon, capacite, velos_disponibles, places_disponibles, en_service, mis_a_jour
-```
-
-Un flux en panne apparaît dans `erreurs` sans bloquer les autres. Pour ajouter une ville : ajouter son `FLUX_<NOM>_URL` au `.env`.
-
-## API SNCF
-
-`lib/navitia.py` interroge l'API SNCF (Navitia, couverture `sncf`) pour chercher une gare et calculer des itinéraires en train, avec
-les émissions de CO₂. Le token est `NAVITIA_TOKEN` dans le `.env`. Comme les flux, c'est le dashboard qui l'appelle : rien n'est stocké.
-La couverture ne va qu'environ 30 jours en avant.
-
-```python
-from lib.navitia import id_gare, itineraires
-itineraires(id_gare("87547000"), id_gare("87574004"), quand="2026-10-12 08:00")   # Paris Austerlitz → Blois-Chambord
-```
-
-`id_gare(code_uic)` convertit le `code_uic` d'une gare de la base en identifiant Navitia.
-
-## Transformation
-
-Nettoie les données de `data/` et les charge dans la base. Les flux temps réel (`FLUX_*`) n'y passent pas.
+### 6. Lancer le dashboard
 
 ```bash
-python src/transformation/transformation.py   # lance toutes les étapes dans l'ordre
+python src/app.py
 ```
 
-Une étape par domaine, dans `src/transformation/` (nettoyage, transformation et chargement), chacune lançable seule :
-- `gare.py` : gares_voyageurs + horaires_gares → `lieu`, `gare`, `gare_horaire`
-- `culture.py` : basilic → `lieu` (culture), avec la gare la plus proche
-- `tourisme.py` : datatourisme_place (attractions seulement) → `lieu` (tourisme), avec la gare la plus proche
-- `sncf.py` (avec `gtfs.py`, commun à tous les réseaux) : horaires_sncf_gtfs → `reseau`, `ligne`, `circulation`, `calendrier`, `arret`, `passage`.
-  Un arrêt dont le code UIC est celui d'une gare pointe vers elle ; les autres (cars TER, gares étrangères) reçoivent leur propre `lieu`
-  (`arret_bus` ou `arret_train`), avec leur gare la plus proche si elle est à moins de 50 km.
-- `transilien.py` : RER et Transilien d'Île-de-France Mobilités → mêmes tables. Les lignes TER de ce fichier sont écartées : le GTFS SNCF est
-  la source des TER (40 % de ces circulations s'y trouvaient déjà). Arrêts rattachés à la gare de la base la plus proche à moins de 300 m
-  dont le nom est compatible, ou à moins de 50 m.
-- `trains_europeens.py` : Eurostar (rattaché par code UIC), Renfe AVE et Trenitalia France (rattachés par position) → mêmes tables.
-- `bus.py` : 21 réseaux urbains (bus, tram, métro, bateau…) et Île-de-France Mobilités → mêmes tables. Chaque arrêt a son lieu `arret_bus` avec sa
-  gare la plus proche (jamais rattaché à une gare). Pour l'Île-de-France, seules les lignes qui ne sont pas des trains sont gardées : les RER,
-  Transilien et TER du même fichier sont déjà dans `transilien.py`. Environ 40 millions de passages : la base fait alors environ 9 Go et le
-  chargement complet prend plusieurs dizaines de minutes.
-- `evenement.py` : datatourisme_fma → `evenement`, `evenement_lieu`, `evenement_periode`, `lieu` (evenement)
-- `festival.py` : liste des festivals en France → mêmes tables (source `festivals`). Le fichier ne donne qu'une saison ou des mois : chaque festival a une
-  période par année (en cours et suivante) couvrant toute sa saison, pas ses dates exactes.
-- `velo.py` : stationnement cyclable (OpenStreetMap, gares du Centre-Val de Loire), Vélib', Vélo'v → `lieu` (station_velo), `station_velo`
-  Les parkings OpenStreetMap à moins de 25 m d'un parking du fichier de la région sont écartés (mêmes parkings, la région prime) : voir l'en-tête de `velo.py`.
+Puis ouvrir [http://localhost:8050](http://localhost:8050).
 
-La Corse et l'outre-mer sont écartés pour l'instant. Pour ajouter un domaine : créer son module
-avec une fonction `transformer()`, puis l'ajouter à `ETAPES` dans `transformation.py`.
+### 7. Lancer les tests (facultatif)
 
-Relançable sans risque : les données de chaque source sont remplacées à chaque passage.
-
-## Lire les bus (et tous les transports)
-
-Bus, tram, métro et trains partagent les mêmes tables (`reseau`, `ligne`, `circulation`, `calendrier`, `arret`, `passage`).
-
-- **Où est l'arrêt ?** `arret.lieu_id` → `lieu` (type `arret_bus` ou `arret_train`), qui donne `lat`, `lon` et `commune`.
-  Le `lieu` d'un arrêt de bus n'est **pas** une gare : `lieu.gare_proche_id` pointe vers la gare la plus proche (à moins de 50 km) et
-  `lieu.distance_gare_km` donne la distance à vol d'oiseau. Un bus n'est jamais « dans » une gare : c'est ce lien qui permet de dire
-  « depuis cette gare, quel arrêt est à 300 m ». Pour un train, `arret.lieu_id` pointe directement vers le lieu de la gare.
-- **Quelle ligne, vers où ?** `ligne` (nom, `type_transport` : Bus, Tramway, Métro…, couleur) appartient à un `reseau`. Une `circulation` est un
-  trajet de cette ligne (`ligne_id`) avec sa `destination`.
-- **Quand ?** `passage` = un arrêt d'une circulation : `circulation_id`, `ordre` (1, 2, 3… le long du trajet), `arret_id`, `heure_arrivee` et
-  `heure_depart` en secondes depuis minuit (peut dépasser 86 400 après minuit). La circulation roule les jours listés dans `calendrier`
-  (même `service_id`, une ligne par date).
-
+```bash
+pytest
 ```
-reseau 1─n ligne 1─n circulation 1─n passage n─1 arret n─1 lieu ──gare_proche_id──▶ lieu (gare)
-                     circulation.service_id ─ calendrier.date
+
+## Architecture du code
+
+```text
+MySNCF-Experience/
+├── src/                                            Application
+│   ├── app.py                                      Dashboard Dash : mise en page des deux onglets et callbacks
+│   ├── initialize.py                               Point d'entrée : crée la base, télécharge les sources, lance la transformation
+│   ├── assets/                                     Fichiers chargés par le navigateur
+│   │   ├── trains.js                               Animation des trains sur la carte
+│   │   └── trains.css
+│   ├── transformation/                             Nettoyage et chargement des données dans la base (un module par domaine)
+│   │   ├── transformation.py                       Lance toutes les étapes dans l'ordre
+│   │   ├── gare.py · culture.py · tourisme.py …    Lieux : gares, culture, tourisme, événements, vélo
+│   │   ├── sncf.py · transilien.py · bus.py …      Horaires de tous les réseaux (trains, bus, tram)
+│   │   ├── voies.py · trace_trajets.py             Tracé des voies et des trajets
+│   │   └── geo.py · lieux.py                       Outils communs
+│   └── EDA/                                        Notebooks d'analyse exploratoire
+│
+├── lib/                                            Bibliothèques réutilisées par l'application
+│   ├── db/
+│   │   ├── models.py                               Tables de la base (SQLAlchemy)
+│   │   ├── connection.py                           Connexion (DATABASE_URL du .env)
+│   │   └── write.py                                Écriture en transaction
+│   ├── itineraire.py                               Logique de l'onglet Itinéraire (recherche, trajets, dernier kilomètre)
+│   ├── navitia.py                                  API SNCF : gares et itinéraires
+│   ├── reseau_ferre.py                             Réseau des voies et plus court chemin
+│   ├── circulations.py                             Trains en circulation sur tout le réseau
+│   ├── suivi.py                                    Position d'un train à un instant donné
+│   ├── sprites.py                                  Images des trains, à l'échelle de la carte
+│   ├── flux.py                                     Flux temps réel des vélos en libre-service
+│   └── downloader.py                               Téléchargement des sources dans data/
+│
+├── migrations/                                     Évolutions du schéma de la base (Alembic)
+│   ├── migration.py
+│   └── versions/                                   001_schema_initial, 002_troncon_voie, 003_trace_trajet…
+│
+├── tests/                                          Un fichier de tests par fonctionnalité (pytest)
+├── data/                                           Sources téléchargées et base générée (non versionnées)
+├── assets/                                         Logo, images des trains, captures du README
+├── .env.example                                    Modèle de configuration (à copier en .env)
+└── requirements.txt                                Dépendances Python
 ```
+
+Le code suit une séparation stricte : `lib/` ne connaît pas Dash (testable seul), `src/app.py` ne fait que l'affichage, et chaque
+domaine de données a son module dans `src/transformation/`.
+
+## Base de données
+
+Les tables sont décrites dans `lib/db/models.py`. L'URL de la base est `DATABASE_URL` dans le `.env` (SQLite par défaut,
+PostgreSQL possible en changeant l'URL).
+
+```text
+  TRANSPORT                                     EMPLACEMENTS
+  ┌─────────┐                                   ┌────────────────────────┐
+  │ reseau  │                                   │         lieu           │
+  └────┬────┘                                   │ type : gare, arret_bus,│
+       │ 1-n                                    │ station_velo, culture, │
+  ┌────┴────┐                                   │ tourisme, evenement    │
+  │ ligne   │                                   │ lat, lon, commune      │
+  └────┬────┘                                   │ gare_proche → lieu     │
+       │ 1-n                                    │ distance_gare_km       │
+  ┌────┴────────┐   ┌────────────┐              └──┬──────┬──────┬───────┘
+  │ circulation ├───┤ calendrier │                 │ 1-1  │ 1-1  │ n-n
+  └────┬────────┘   └────────────┘                 │      │      │
+       │ 1-n                                ┌──────┴──┐ ┌─┴────────────┐ ┌┴───────────────┐
+  ┌────┴────┐      ┌───────┐   n-1          │  gare   │ │ station_velo │ │ evenement_lieu │
+  │ passage ├─n-1──┤ arret ├───────────────►│         │ └──────────────┘ └───────┬────────┘
+  └─────────┘      └───┬───┘                └────┬────┘                          │ n-1
+                       │ départ / arrivée        │ 1-n                    ┌──────┴─────┐
+                ┌──────┴───────┐          ┌──────┴───────┐                │ evenement  │
+                │ trace_trajet │          │ gare_horaire │                └──────┬─────┘
+                └──────────────┘          └──────────────┘                       │ 1-n
+                  tracé du train                                       ┌─────────┴─────────┐
+                  entre 2 arrêts,                                      │ evenement_periode │
+                  calculé sur ───► troncon_voie (voies SNCF Réseau)    └───────────────────┘
+```
+
+- **Transport** : tous les réseaux (trains, bus, tram, métro) partagent `reseau → ligne → circulation → passage → arret`.
+  Les heures de passage sont en secondes depuis minuit (elles dépassent 86 400 après minuit) ; `calendrier` donne les jours de circulation.
+- **Emplacements** : tout ce qui a une position est un `lieu`, rattaché à sa gare la plus proche (`gare_proche_id`, `distance_gare_km`).
+- **Tracé** : `troncon_voie` contient les voies du réseau ferré national ; `trace_trajet` en déduit le tracé entre deux arrêts consécutifs.
+
+Modifier le schéma :
+
+```bash
+python migrations/migration.py                     # applique les migrations jusqu'à la plus récente
+python migrations/migration.py --new "ajoute X"    # après avoir modifié lib/db/models.py : crée la migration suivante
+```
+
+Les migrations sont numérotées dans `migrations/versions/` (001, 002, 003…) : `--new` crée automatiquement le numéro suivant.
+Une migration existante ne se modifie jamais : toute évolution est une nouvelle migration, à relire avant de l'appliquer.
+
+## Données
+
+### Sources
+
+Chaque source est une variable `DATASET_<SOURCE>_URL` du `.env`, téléchargée dans `data/<source>/` (les `.zip` sont décompressés).
+Les sources chargées par `src/initialize.py` sont la liste `SOURCES` de ce fichier ; les autres sont déclarées pour la suite du projet.
+
+```bash
+python -c "from lib.downloader import download; download(['basilic'])"   # télécharger une source seule
+```
+
+### Transformation
+
+```bash
+python src/transformation/transformation.py   # toutes les étapes dans l'ordre (chaque module se lance aussi seul)
+```
+
+| Étape | Source | Tables remplies |
+|---|---|---|
+| `gare.py` | gares de voyageurs, horaires des gares | `lieu`, `gare`, `gare_horaire` |
+| `sncf.py` | horaires SNCF (GTFS : TGV, TER, Intercités, Ouigo, cars) | `reseau`, `ligne`, `circulation`, `calendrier`, `arret`, `passage` |
+| `transilien.py` | RER et Transilien (Île-de-France Mobilités) | mêmes tables |
+| `trains_europeens.py` | Eurostar, Renfe AVE, Trenitalia France | mêmes tables |
+| `culture.py` | Basilic (lieux culturels) | `lieu` (culture) |
+| `tourisme.py` | DATAtourisme (lieux) | `lieu` (tourisme) |
+| `evenement.py` · `festival.py` | DATAtourisme (événements), festivals | `evenement`, `evenement_lieu`, `evenement_periode`, `lieu` |
+| `velo.py` | stationnement cyclable, Vélib', Vélo'v | `lieu` (station_velo), `station_velo` |
+| `bus.py` | 21 réseaux urbains et Île-de-France Mobilités | tables de transport |
+| `voies.py` · `trace_trajets.py` | voies du réseau ferré national (SNCF Réseau) | `troncon_voie`, `trace_trajet` |
+
+La Corse et l'outre-mer sont écartés pour l'instant. Les détails de chaque étape (rattachement des arrêts aux gares, doublons
+écartés…) sont dans l'en-tête de son module. Pour ajouter un domaine : créer son module avec une fonction `transformer()`, puis
+l'ajouter à `ETAPES` dans `transformation.py`. Relançable sans risque : les données de chaque source sont remplacées à chaque passage.
+
+### Données en direct (non stockées)
+
+- **API SNCF** (`lib/navitia.py`) : itinéraires en train, retards et émissions de CO₂, avec `NAVITIA_TOKEN`. La couverture ne va qu'environ 30 jours en avant.
+- **Vélos en libre-service** (`lib/flux.py`) : stations des variables `FLUX_<NOM>_URL` (GBFS v2 et v3). Un flux en panne ne bloque pas les autres.
+
+## Lire les horaires (trains, bus, tram…)
+
+- **Où est l'arrêt ?** `arret.lieu_id` → `lieu`. Pour un train, c'est la gare ; pour un bus, un `lieu` de type `arret_bus` avec sa gare
+  la plus proche (`gare_proche_id`, à moins de 50 km).
+- **Quelle ligne, vers où ?** `ligne` (nom, `type_transport`, couleur) appartient à un `reseau` ; une `circulation` est un trajet de cette ligne vers sa `destination`.
+- **Quand ?** `passage` : `circulation_id`, `ordre` (1, 2, 3… le long du trajet), `arret_id`, `heure_arrivee`, `heure_depart`.
+  La circulation roule les jours listés dans `calendrier` (même `service_id`).
 
 Exemple : prochains départs d'un arrêt le 12 octobre 2026.
 
@@ -132,48 +231,6 @@ JOIN ligne li ON li.id = c.ligne_id
 JOIN calendrier k ON k.service_id = c.service_id AND k.date = '2026-10-12'
 WHERE a.id = 'nantes_naolib:FR_NAOLIB:Quay:2299'
 ORDER BY p.heure_depart;
-```
-
-Pour savoir où va un bus : les `passage` suivants de la même circulation (`ordre` croissant) donnent les arrêts desservis ensuite.
-
-## Base de données
-
-Les tables sont décrites dans `lib/db/models.py` (SQLAlchemy). L'URL de la base est `DATABASE_URL` dans `.env`
-(SQLite par défaut, PostgreSQL possible en changeant l'URL).
-
-```bash
-python migrations/migration.py                         # applique les migrations de migrations/versions/ jusqu'à la plus récente
-python migrations/migration.py --new "ajoute X"   # après avoir modifié lib/db/models.py : crée la migration suivante (002, 003…)
-```
-
-Une migration existante ne se modifie jamais : toute évolution du schéma est une nouvelle migration, à relire avant de l'appliquer.
-
-## Schéma macro de la base de données
-
-```text
-  TRANSPORT                                    EMPLACEMENTS
-  ┌─────────┐                                  ┌────────────────────────┐
-  │ reseau  │                                  │         lieu           │
-  └────┬────┘                                  │ type : gare, arret_bus,│
-       │ 1-n                                   │ station_velo, culture… │
-  ┌────┴────┐                                  │ lat, lon, adresse      │
-  │ ligne   │                                  │ gare_proche → lieu     │
-  └────┬────┘                                  │ distance_gare_km       │
-       │ 1-n                                   └──┬──────┬──────┬───────┘
-  ┌────┴────────┐   ┌────────────┐                │      │      │
-  │ circulation ├───┤ calendrier │      ┌─────────┘      │      └──────────┐
-  └────┬────────┘   └────────────┘      │ 1-1            │ 1-1             │ n-n
-       │ 1-n                       ┌────┴────┐   ┌───────┴──────┐  ┌───────┴────────┐
-  ┌────┴────┐      ┌───────┐  n-1  │  gare   │   │ station_velo │  │ evenement_lieu │
-  │ passage ├─n-1──┤ arret ├──────►│ (lieu)  │   └──────────────┘  └───────┬────────┘
-  └─────────┘      └───────┘       └────┬────┘                             │ n-1
-                    un arrêt GTFS       │ 1-n                       ┌──────┴─────┐
-                    pointe vers         ┌┴─────────────┐            │ evenement  │
-                    son lieu            │ gare_horaire │            └──────┬─────┘
-                                        └──────────────┘                   │ 1-n
-                                                               ┌───────────┴───────┐
-                                                               │ evenement_periode │
-                                                               └───────────────────┘
 ```
 
 ## Licence
