@@ -92,6 +92,8 @@ Une étape par domaine, dans `src/transformation/` (nettoyage, transformation et
   Transilien et TER du même fichier sont déjà dans `transilien.py`. Environ 40 millions de passages : la base fait alors environ 9 Go et le
   chargement complet prend plusieurs dizaines de minutes.
 - `evenement.py` : datatourisme_fma → `evenement`, `evenement_lieu`, `evenement_periode`, `lieu` (evenement)
+- `festival.py` : liste des festivals en France → mêmes tables (source `festivals`). Le fichier ne donne qu'une saison ou des mois : chaque festival a une
+  période par année (en cours et suivante) couvrant toute sa saison, pas ses dates exactes.
 - `velo.py` : stationnement cyclable (OpenStreetMap, gares du Centre-Val de Loire), Vélib', Vélo'v → `lieu` (station_velo), `station_velo`
   Les parkings OpenStreetMap à moins de 25 m d'un parking du fichier de la région sont écartés (mêmes parkings, la région prime) : voir l'en-tête de `velo.py`.
 
@@ -99,6 +101,40 @@ La Corse et l'outre-mer sont écartés pour l'instant. Pour ajouter un domaine :
 avec une fonction `transformer()`, puis l'ajouter à `ETAPES` dans `transformation.py`.
 
 Relançable sans risque : les données de chaque source sont remplacées à chaque passage.
+
+## Lire les bus (et tous les transports)
+
+Bus, tram, métro et trains partagent les mêmes tables (`reseau`, `ligne`, `circulation`, `calendrier`, `arret`, `passage`).
+
+- **Où est l'arrêt ?** `arret.lieu_id` → `lieu` (type `arret_bus` ou `arret_train`), qui donne `lat`, `lon` et `commune`.
+  Le `lieu` d'un arrêt de bus n'est **pas** une gare : `lieu.gare_proche_id` pointe vers la gare la plus proche (à moins de 50 km) et
+  `lieu.distance_gare_km` donne la distance à vol d'oiseau. Un bus n'est jamais « dans » une gare : c'est ce lien qui permet de dire
+  « depuis cette gare, quel arrêt est à 300 m ». Pour un train, `arret.lieu_id` pointe directement vers le lieu de la gare.
+- **Quelle ligne, vers où ?** `ligne` (nom, `type_transport` : Bus, Tramway, Métro…, couleur) appartient à un `reseau`. Une `circulation` est un
+  trajet de cette ligne (`ligne_id`) avec sa `destination`.
+- **Quand ?** `passage` = un arrêt d'une circulation : `circulation_id`, `ordre` (1, 2, 3… le long du trajet), `arret_id`, `heure_arrivee` et
+  `heure_depart` en secondes depuis minuit (peut dépasser 86 400 après minuit). La circulation roule les jours listés dans `calendrier`
+  (même `service_id`, une ligne par date).
+
+```
+reseau 1─n ligne 1─n circulation 1─n passage n─1 arret n─1 lieu ──gare_proche_id──▶ lieu (gare)
+                     circulation.service_id ─ calendrier.date
+```
+
+Exemple : prochains départs d'un arrêt le 12 octobre 2026.
+
+```sql
+SELECT li.nom AS ligne, c.destination, p.heure_depart / 3600 AS h, (p.heure_depart % 3600) / 60 AS min
+FROM arret a
+JOIN passage p ON p.arret_id = a.id
+JOIN circulation c ON c.id = p.circulation_id
+JOIN ligne li ON li.id = c.ligne_id
+JOIN calendrier k ON k.service_id = c.service_id AND k.date = '2026-10-12'
+WHERE a.id = 'nantes_naolib:FR_NAOLIB:Quay:2299'
+ORDER BY p.heure_depart;
+```
+
+Pour savoir où va un bus : les `passage` suivants de la même circulation (`ordre` croissant) donnent les arrêts desservis ensuite.
 
 ## Base de données
 
