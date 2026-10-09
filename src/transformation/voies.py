@@ -50,7 +50,7 @@ def lire(dossier):
     return entites
 
 
-def _longueur_km(points):
+def longueur_km(points):
     """Longueur d'une polyligne [(lon, lat), …] en kilomètres (haversine)."""
     total = 0.0
     for (lon1, lat1), (lon2, lat2) in zip(points, points[1:]):
@@ -79,7 +79,7 @@ def _troncons(entites, source, type_voie=lambda a: None, nom_voie=lambda a: None
             if points:
                 out.append({"source": source, "code_ligne": str(a["code_ligne"]).strip(), "type_voie": type_voie(a),
                             "nom_voie": nom_voie(a), "geometrie": json.dumps(points, separators=(",", ":")),
-                            "longueur_km": round(_longueur_km(points), 3)})
+                            "longueur_km": round(longueur_km(points), 3)})
     return out
 
 

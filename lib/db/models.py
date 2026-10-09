@@ -2,14 +2,14 @@
 
 Transport (GTFS, tous réseaux) : reseau → ligne → circulation → passage → arret.
 Emplacements : lieu (gare, arrêt de bus, station vélo, culture, tourisme…) ; gare et station_velo en précisent le type.
-Tracé du réseau ferré national : troncon_voie (polylignes, sans lien avec les tables de transport).
+Tracé du réseau ferré national : troncon_voie (polylignes, sans lien avec les tables de transport) ; trace_trajet en déduit le tracé entre deux arrêts consécutifs.
 Événements : evenement → evenement_lieu → lieu, et evenement_periode.
 Identifiants GTFS préfixés par le réseau (« sncf:… ») pour rester uniques entre réseaux.
 Heures de passage en secondes depuis minuit (peuvent dépasser 86400 pour les trains de nuit).
 """
 import datetime as dt
 
-from sqlalchemy import Date, Float, ForeignKey, Integer, String, Text, Time
+from sqlalchemy import Boolean, Date, Float, ForeignKey, Integer, String, Text, Time
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -127,6 +127,18 @@ class TronconVoie(Base):
     nom_voie: Mapped[str | None] = mapped_column(String)
     geometrie: Mapped[str] = mapped_column(Text)
     longueur_km: Mapped[float | None] = mapped_column(Float)
+
+
+class TraceTrajet(Base):
+    """Tracé d'un train entre deux arrêts qui se suivent dans au moins une circulation, calculé sur troncon_voie.
+    sur_voie faux : pas de chemin fiable sur le réseau (gare étrangère, hors réseau ou détour absurde), le tracé est une ligne droite.
+    geometrie : liste JSON de points [[lon, lat], …], du premier arrêt au second."""
+    __tablename__ = "trace_trajet"
+    arret_depart_id: Mapped[str] = mapped_column(ForeignKey("arret.id"), primary_key=True)
+    arret_arrivee_id: Mapped[str] = mapped_column(ForeignKey("arret.id"), primary_key=True)
+    geometrie: Mapped[str] = mapped_column(Text)
+    longueur_km: Mapped[float | None] = mapped_column(Float)
+    sur_voie: Mapped[bool] = mapped_column(Boolean)
 
 
 # ── Événements ──────────────────────────────────────────────────────────────────
