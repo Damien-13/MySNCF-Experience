@@ -61,9 +61,17 @@ def _date(texte):
     return datetime.strptime(texte, "%Y%m%dT%H%M%S")
 
 
+def _lonlat(lieu):
+    """(lon, lat) d'un lieu Navitia (gare, arrêt, adresse…), None s'il n'a pas de coordonnées."""
+    lieu = lieu or {}
+    coord = (lieu.get(lieu.get("embedded_type")) or {}).get("coord")
+    return (float(coord["lon"]), float(coord["lat"])) if coord else None
+
+
 def _section(s):
     infos = s.get("display_informations", {})
     return {
+        "de_lonlat": _lonlat(s.get("from")), "vers_lonlat": _lonlat(s.get("to")),
         "type": s["type"], "mode": s.get("mode") or ("train" if s["type"] == "public_transport" else None),
         "duree_s": s["duration"], "de": s.get("from", {}).get("name"), "vers": s.get("to", {}).get("name"),
         "ligne": infos.get("commercial_mode"), "numero": infos.get("headsign"), "direction": infos.get("direction"),
@@ -75,7 +83,7 @@ def _section(s):
 def itineraires(depart, arrivee, quand=None, nombre=3):
     """Trajets en train entre deux lieux : gares (id_gare) ou positions « lon;lat ». `quand` : datetime ou « AAAA-MM-JJ HH:MM »
     (maintenant par défaut). Retourne une liste de trajets (vide s'il n'y en a pas) : duree_s, correspondances, depart, arrivee,
-    co2_g et sections (type, mode, duree_s, de, vers, ligne, numero, direction, depart, arrivee)."""
+    co2_g et sections (type, mode, duree_s, de, vers, de_lonlat, vers_lonlat, ligne, numero, direction, depart, arrivee)."""
     quand = pd.Timestamp(quand).to_pydatetime() if quand is not None else datetime.now()
     statut, contenu = _get("/journeys", **{"from": depart, "to": arrivee, "datetime": quand.strftime("%Y%m%dT%H%M%S"), "count": nombre})
     if statut == 404 and contenu.get("error", {}).get("id") in ("no_origin", "no_destination", "no_solution"):
