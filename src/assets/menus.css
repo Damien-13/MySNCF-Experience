@@ -1,0 +1,15 @@
+/* Icônes Font Awesome dans le texte des menus déroulants (voir _option_destination dans app.py).
+   Le libellé reste du texte simple : on y met le caractère de l'icône, et cette police (la police « solid » de Font Awesome,
+   déclarée en graisse normale) ne sert que pour ces caractères, le reste du texte garde la police habituelle. */
+@font-face {
+  font-family: "Pictos FA";
+  src: url("https://use.fontawesome.com/releases/v6.7.2/webfonts/fa-solid-900.woff2") format("woff2");
+  font-weight: normal;
+  font-style: normal;
+  unicode-range: U+E000-F8FF;
+}
+
+#input-arrivee,
+.dash-dropdown-option {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "Pictos FA";
+}

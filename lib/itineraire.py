@@ -15,7 +15,7 @@ Rien n'est stocké : l'API Navitia est appelée à chaque recherche (voir lib/na
 """
 import math
 import re
-from datetime import date, datetime, time, timedelta
+from datetime import datetime, time, timedelta
 
 import pandas as pd
 import sqlalchemy as sa
@@ -316,32 +316,6 @@ def retour_minimum(quand, maintenant=None):
 def options_heures(jour, minimum):
     """Options du menu d'heures (« 08:00 »…) : celles qui précèdent `minimum` (datetime) sont grisées pour ce `jour` (date ; None = rien de grisé)."""
     return [{"label": f"{h:02d}:00", "value": f"{h:02d}:00", "disabled": bool(jour and minimum and datetime.combine(jour, time(h)) < minimum)} for h in HEURES]
-
-
-def periode_evenement(engine, lieu_id, aujourdhui=None):
-    """(début, fin) de la prochaine période de l'événement qui a lieu à ce lieu (en cours ou à venir), None si ce n'est pas un événement ou s'il est passé."""
-    if not lieu_id or _est_ville(lieu_id):
-        return None
-    ligne = pd.read_sql(sa.text(
-        "SELECT p.date_debut, p.date_fin FROM evenement_periode p JOIN evenement_lieu l ON l.evenement_id = p.evenement_id "
-        "JOIN lieu ON lieu.id = l.lieu_id WHERE l.lieu_id = :id AND lieu.type = 'evenement' AND p.date_fin >= :jour ORDER BY p.date_debut LIMIT 1"),
-        engine, params={"id": int(lieu_id), "jour": str((aujourdhui or date.today()).isoformat())})
-    if ligne.empty:
-        return None
-    return date.fromisoformat(str(ligne.iloc[0]["date_debut"])[:10]), date.fromisoformat(str(ligne.iloc[0]["date_fin"])[:10])
-
-
-def bornes_dates(periode, aujourdhui=None):
-    """(premier jour, dernier jour, dans_la_fenêtre) du calendrier de l'aller : de aujourd'hui à 30 jours, réduit à la période de l'événement.
-    Si l'événement commence après la fenêtre de l'API, le calendrier reste complet et dans_la_fenêtre est faux."""
-    jour = aujourdhui or date.today()
-    mini, maxi = jour, jour + timedelta(days=FENETRE_API_JOURS)
-    if periode:
-        debut, fin = max(mini, periode[0]), min(maxi, periode[1])
-        if debut <= fin:
-            return debut, fin, True
-        return mini, maxi, False
-    return mini, maxi, True
 
 
 def rechercher(depart_id, destination_id, quand=None, retour=None, engine=None):

@@ -194,16 +194,6 @@ def test_periode_invalide():
     assert periode_invalide(None, maintenant) is None
 
 
-def test_bornes_dates_selon_la_periode_de_l_evenement():
-    from datetime import date
-    from lib.itineraire import bornes_dates
-    jour = date(2026, 10, 9)
-    assert bornes_dates(None, jour) == (jour, date(2026, 11, 8), True)
-    assert bornes_dates((date(2026, 10, 12), date(2026, 10, 14)), jour) == (date(2026, 10, 12), date(2026, 10, 14), True)
-    assert bornes_dates((date(2026, 1, 1), date(2026, 12, 31)), jour) == (jour, date(2026, 11, 8), True)       # année entière : seule la fenêtre de l'API borne
-    assert bornes_dates((date(2026, 12, 20), date(2026, 12, 22)), jour) == (jour, date(2026, 11, 8), False)    # après la fenêtre de l'API
-
-
 def test_heures_grisees_et_retour_une_heure_apres():
     from datetime import date, datetime
     from lib.itineraire import options_heures, retour_minimum, retour_invalide

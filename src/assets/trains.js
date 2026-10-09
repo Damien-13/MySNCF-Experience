@@ -68,6 +68,14 @@
       if (trouvee) {
         trouvee.on("dragstart", () => { S.suivi = null; });         // on déplace la carte à la main : la caméra lâche le train
         trouvee.on("zoomend moveend", dessinerPas);       // les empreintes sont espacées en pixels : on les refait quand l'échelle ou la vue change
+        // Le cadre de la carte change de taille (onglet affiché, fenêtre redimensionnée…) : Leaflet recalcule la sienne sans perdre son centre,
+        // sinon une partie de la carte reste grise.
+        new ResizeObserver(() => {
+          if (!trouvee._container.offsetWidth) return;     // onglet caché : rien à faire tant que la carte n'est pas visible
+          const centre = trouvee.getCenter(), zoom = trouvee.getZoom();
+          trouvee.invalidateSize({ pan: false });
+          trouvee.setView(centre, zoom, { animate: false });
+        }).observe(trouvee._container);
       }
     }
     S.carte = trouvee;
@@ -387,17 +395,11 @@
         if (S.horloge.mode === "sim") setTimeout(recentrer, 150);   // simulation lancée : comme un clic sur le train
         return Date.now();
       },
-      /** Onglet Itinéraire affiché : la carte, créée dans un onglet caché, recalcule sa taille sans perdre son centre. */
+      /** Au chargement : on retrouve la carte (même dans l'onglet caché) pour brancher le recalcul de sa taille (voir trouverCarte). */
       afficherOnglet: function (onglet) {
-        if (onglet === "tab-1") {
-          setTimeout(() => {
-            const carte = trouverCarte();
-            if (!carte) return;
-            const centre = carte.getCenter(), zoom = carte.getZoom();
-            carte.invalidateSize({ pan: false });
-            carte.setView(centre, zoom, { animate: false });
-          }, 50);
-        }
+        let essais = 0;
+        const chercher = () => { if (!trouverCarte() && ++essais < 40) setTimeout(chercher, 100); };
+        chercher();
         return Date.now();
       },
       /** Bouton « Recentrer » : la carte se place sur le train du trajet choisi. */
