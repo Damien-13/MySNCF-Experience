@@ -2,13 +2,14 @@
 
 Transport (GTFS, tous réseaux) : reseau → ligne → circulation → passage → arret.
 Emplacements : lieu (gare, arrêt de bus, station vélo, culture, tourisme…) ; gare et station_velo en précisent le type.
+Tracé du réseau ferré national : troncon_voie (polylignes, sans lien avec les tables de transport).
 Événements : evenement → evenement_lieu → lieu, et evenement_periode.
 Identifiants GTFS préfixés par le réseau (« sncf:… ») pour rester uniques entre réseaux.
 Heures de passage en secondes depuis minuit (peuvent dépasser 86400 pour les trains de nuit).
 """
 import datetime as dt
 
-from sqlalchemy import Date, Float, ForeignKey, Integer, String, Time
+from sqlalchemy import Date, Float, ForeignKey, Integer, String, Text, Time
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -111,6 +112,21 @@ class StationVelo(Base):
     lieu_id: Mapped[int] = mapped_column(ForeignKey("lieu.id"), primary_key=True)
     reseau: Mapped[str | None] = mapped_column(String)
     capacite: Mapped[int | None] = mapped_column(Integer)
+
+
+# ── Tracé ferroviaire ───────────────────────────────────────────────────────────
+class TronconVoie(Base):
+    """Morceau de voie ferrée du réseau ferré national (SNCF Réseau), à ne pas confondre avec `ligne` (ligne commerciale).
+    source : « voies » (une voie) ou « lignes » (tracé de la ligne, utilisé là où les voies manquent).
+    geometrie : liste JSON de points [[lon, lat], …], simplifiée."""
+    __tablename__ = "troncon_voie"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String, index=True)
+    code_ligne: Mapped[str] = mapped_column(String, index=True)  # code SNCF Réseau de la ligne (« 125000 »)
+    type_voie: Mapped[str | None] = mapped_column(String)        # VPL, VPA (null pour source « lignes »)
+    nom_voie: Mapped[str | None] = mapped_column(String)
+    geometrie: Mapped[str] = mapped_column(Text)
+    longueur_km: Mapped[float | None] = mapped_column(Float)
 
 
 # ── Événements ──────────────────────────────────────────────────────────────────
