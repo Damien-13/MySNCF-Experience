@@ -32,7 +32,8 @@ def get_logo_base64():
 LOGO_SRC = get_logo_base64()
 
 import dash
-from dash import dcc, html, Input, Output, State
+from dash import ALL, ctx, dcc, html, Input, Output, State
+from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 import dash_leaflet as dl
 import plotly.express as px
@@ -40,10 +41,12 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
-from datetime import date
+import json
+import re
+from datetime import date, datetime
 
 from lib.db.connection import get_engine
-from lib.itineraire import RAYON_POI_KM, chercher_destinations, options_gares, quand_depuis, rechercher
+from lib.itineraire import RAYON_POI_KM, chercher_destinations, options_gares, quand_depuis, rechercher, tracer_trajet
 from lib.reseau_ferre import charger_reseau
 
 # ==============================================================================
@@ -165,6 +168,8 @@ hours_opts = [{'label': f"{h:02d}:00", 'value': f"{h:02d}:00"} for h in range(5,
 
 app.layout = dbc.Container(id="main-container", style={"backgroundColor": init_colors["bg"], "color": init_colors["text"], "minHeight": "100vh", "padding": "20px", **transition_style}, fluid=True, children=[
     dcc.Download(id="download-export"),
+    dcc.Store(id="store-resultat"),
+    dcc.Store(id="store-selection", data={"sens": "aller", "index": 0}),
     
     # BANDEAU TOP BAR ÉPURÉ (Juste Logo et Thème)
     dbc.Row(id="top-bar", style={"backgroundColor": init_colors["card_bg"], "borderRadius": "8px", **transition_style}, className="p-3 mb-4 shadow-sm align-items-center", children=[
@@ -193,7 +198,7 @@ app.layout = dbc.Container(id="main-container", style={"backgroundColor": init_c
                 dbc.Row([
                     dbc.Col([
                         dbc.Card(id="card-map", style={"border": "none", "backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "height": "650px", "position": "relative", "overflow": "hidden", **transition_style}, children=[
-                            dcc.Loading(custom_spinner=custom_spinner, target_components={"search-results": "children", "map-lines": "children", "map-isochrones": "children", "map-markers": "children"}, children=[
+                            dcc.Loading(custom_spinner=custom_spinner, target_components={"map-lines": "children", "map-isochrones": "children", "map-markers": "children"}, children=[
                                 html.Div(style={"position": "relative"}, children=[
                                     
                                     # PANNEAU RECHERCHE FLOTTANT (Onglet 1)
@@ -240,8 +245,7 @@ app.layout = dbc.Container(id="main-container", style={"backgroundColor": init_c
                                             value="tous", className="fw-bold mb-4", style={"fontSize": "0.85rem"}
                                         ),
                                         
-                                        dbc.Button([html.I(className="fa-solid fa-magnifying-glass me-2"), "Rechercher"], id="btn-search", style={"backgroundColor": CARMILLON, "border": "none", "width": "100%", "fontWeight": "bold", "padding": "10px"}),
-                                        html.Div(id="search-results", className="mt-3", style={"fontSize": "0.85rem", "maxHeight": "230px", "overflowY": "auto"})
+                                        dbc.Button([html.I(className="fa-solid fa-magnifying-glass me-2"), "Rechercher"], id="btn-search", style={"backgroundColor": CARMILLON, "border": "none", "width": "100%", "fontWeight": "bold", "padding": "10px"})
                                     ]),
 
                                     dl.Map(id="map", center=[46.2, 3.5], zoom=5, style={"width": "100%", "height": "650px", "display": "block", "margin": "0"}, children=[
@@ -252,6 +256,20 @@ app.layout = dbc.Container(id="main-container", style={"backgroundColor": init_c
                             ])
                         ])
                     ], width=12)
+                ]),
+
+                # TRAJETS PROPOSÉS : un bloc cliquable par option, Aller / Retour
+                dbc.Row(className="mt-4", children=[
+                    dbc.Col(dbc.Card(id="card-results", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "border": "none", **transition_style}, children=[dbc.CardBody([
+                        dbc.Row(className="align-items-center g-3 mb-3", children=[
+                            dbc.Col(html.H5(id="results-title", children="Trajets proposés", className="mb-0"), xs=12, lg=5),
+                            dbc.Col(dbc.RadioItems(id="sens", options=[{"label": "Aller", "value": "aller"}, {"label": "Retour", "value": "retour"}], value="aller", inline=True,
+                                                   className="btn-group", inputClassName="btn-check", labelClassName="btn btn-outline-secondary", labelCheckedClassName="active"),
+                                    id="col-sens", xs=12, lg=3, style={"display": "none"}),
+                            dbc.Col(html.Div(id="poi-legend"), xs=12, lg=4, className="text-lg-end"),
+                        ]),
+                        dcc.Loading(type="circle", color=CARMILLON, children=html.Div(id="options-trajets", children=html.Div("Choisissez une gare de départ et une destination, puis lancez la recherche.", className="text-muted"))),
+                    ])]), width=12)
                 ])
             ])
         ]),
@@ -350,7 +368,7 @@ def update_destinations(recherche, categorie, choisi):
      Output("card-map", "style"), Output("card-g1", "style"), Output("card-g2", "style"), Output("card-g3", "style"), Output("card-g4", "style"),
      Output("map-tiles", "url"),
      Output("graph-1", "figure"), Output("graph-2", "figure"), Output("graph-3", "figure"),
-     Output("table-container", "children")],
+     Output("table-container", "children"), Output("card-results", "style")],
     [Input("theme-switch", "value"), Input("filter-categorie", "value")]
 )
 def update_ui_and_graphs(theme_values, categorie):
@@ -387,86 +405,183 @@ def update_ui_and_graphs(theme_values, categorie):
         {"backgroundColor": colors["card_bg"], "color": colors["text"], "border": "none", "marginBottom": "20px", **transition_style},
         {"backgroundColor": colors["card_bg"], "color": colors["text"], "border": "none", "marginBottom": "20px", **transition_style},
         card_st, card_st,
-        colors["tiles"], fig1, fig2, fig3, generate_decision_table(theme)
+        colors["tiles"], fig1, fig2, fig3, generate_decision_table(theme), card_st
     )
+
+POI_COULEURS = {"culture": COLORBLIND_PALETTE[0], "tourisme": "#984ea3", "evenement": COLORBLIND_PALETTE[2]}
+POI_LIBELLES = {"culture": "Culture", "tourisme": "Tourisme", "evenement": "Festival / événement"}
+POI_ICONES = {"culture": "fa-landmark", "tourisme": "fa-camera", "evenement": "fa-masks-theater"}
+POI_PAR_CATEGORIE = {"tous": ["tourisme", "culture", "evenement"], "culture": ["culture", "tourisme"], "evenement": ["evenement"]}
+
 
 def _duree(secondes):
     h, m = divmod(round(secondes / 60), 60)
     return f"{h} h {m:02d}" if h else f"{m} min"
 
-def _resume_trajet(titre, t):
-    """Une ligne de résultats : heures, durée, correspondances, trains empruntés."""
-    trains = " → ".join(f"{sec['ligne'] or 'Train'} {sec['numero'] or ''}".strip() for sec in t["sections"] if sec["type"] == "public_transport")
-    return html.Div(className="mb-2", children=[
-        html.Div([html.Span(f"{titre} ", className="fw-bold"), f"{t['depart']:%d/%m %H:%M} → {t['arrivee']:%H:%M} · {_duree(t['duree_s'])}"
-                  + (f" · {t['correspondances']} corresp." if t["correspondances"] else " · direct")]),
-        html.Div(trains, style={"opacity": 0.7}),
-    ])
+def _heure(texte):
+    return datetime.fromisoformat(texte).strftime("%H:%M")
 
-def _panneau_resultats(r):
-    if r["erreur_api"]:
-        return html.Div(f"Horaires indisponibles ({r['erreur_api']}). Tracé direct entre les gares.", className="text-warning")
-    if r["gare_arrivee"] is None:
-        return html.Div("Aucune gare d'arrivée connue pour ce lieu.", className="text-warning")
-    if not r["trajets"]:
-        return html.Div("Aucun train trouvé à cette date (l'API couvre environ 30 jours).", className="text-warning")
-    blocs = [html.Div(f"{r['depart']['nom']} → {r['gare_arrivee']['nom']}", className="fw-bold mb-2")]
-    blocs += [_resume_trajet("Aller" if i == 0 else f"Option {i + 1}", t) for i, t in enumerate(r["trajets"])]
-    if r["retour"]:
-        blocs.append(_resume_trajet("Retour", r["retour"]))
-    return blocs
+def _echantillon(couleur, tirets):
+    """Petit trait qui reprend la couleur et le motif d'un service (pour reconnaître la ligne sur la carte sans se fier à la couleur)."""
+    base = {"display": "inline-block", "width": "38px", "height": "5px", "marginRight": "8px", "verticalAlign": "middle", "borderRadius": "3px"}
+    if not tirets:
+        return html.Span(style={**base, "backgroundColor": couleur})
+    arrets, position = [], 0.0
+    for i, v in enumerate(float(v) * 1.6 for v in tirets.split()):         # rangs pairs : trait, rangs impairs : vide
+        arrets.append(f"{couleur if i % 2 == 0 else 'transparent'} {position:.0f}px {position + v:.0f}px")
+        position += v
+    return html.Span(style={**base, "background": f"repeating-linear-gradient(90deg, {', '.join(arrets)})"})
 
-def _carte(r, categorie):
-    """(lignes, cercle, repères) de la carte : trains collés aux voies, dernier kilomètre en pointillés, lieux autour de la destination."""
+def _carte_option(i, trajet, actif, traces):
+    """Un bloc cliquable : heures, durée, correspondances, puis un trait + le nom de chaque train."""
+    lignes = [html.Div(className="mb-1", children=[_echantillon(t["style"]["couleur"], t["style"]["tirets"]), html.Span(t["libelle"], className="fw-bold"),
+                                                   html.Span(f" · {t['style']['libelle']}", style={"opacity": 0.7})]) for t in traces]
+    co2 = trajet.get("co2_g")
+    return dbc.Col(xs=12, lg=4, className="mb-3", children=html.Div(id={"type": "option", "index": i}, n_clicks=0, role="button", tabIndex=0, children=[
+        html.Div([html.Span(f"Option {i + 1}", className="badge me-2", style={"backgroundColor": CARMILLON if actif else "#6c757d"}),
+                  html.Span(f"{_heure(trajet['depart'])} → {_heure(trajet['arrivee'])}", className="fs-4 fw-bold")]),
+        html.Div(f"{_duree(trajet['duree_s'])} · " + (f"{trajet['correspondances']} correspondance(s)" if trajet["correspondances"] else "direct")
+                 + (f" · {co2 / 1000:.1f} kg CO₂e" if co2 else ""), className="mb-2", style={"opacity": 0.8}),
+        *lignes,
+    ], style={"cursor": "pointer", "padding": "14px", "borderRadius": "12px", "height": "100%",
+              "border": f"3px solid {CARMILLON}" if actif else "1px solid rgba(128,128,128,0.35)",
+              "boxShadow": "0px 4px 14px rgba(0,0,0,0.18)" if actif else "none", "transition": "all 0.2s ease"}))
+
+def _pastille(type_, taille=26):
+    """Style d'une pastille ronde de la couleur de la catégorie, avec le pictogramme en blanc (comme les repères de Google Maps)."""
+    return {"width": f"{taille}px", "height": f"{taille}px", "borderRadius": "50%", "background": POI_COULEURS.get(type_, "#555555"), "color": "white",
+            "border": "2px solid white", "boxShadow": "0 1px 5px rgba(0,0,0,0.45)", "display": "flex", "alignItems": "center", "justifyContent": "center",
+            "fontSize": f"{taille // 2}px"}
+
+def _css(style):
+    """Style Dash (camelCase) → texte CSS, pour le HTML des repères de la carte."""
+    return "; ".join(f"{re.sub('([A-Z])', lambda m: '-' + m.group(1).lower(), cle)}: {valeur}" for cle, valeur in style.items())
+
+def _legende_poi(categorie):
+    return [html.Span([html.Span(html.I(className=f"fa-solid {POI_ICONES[t]}"), style={**_pastille(t, 22), "display": "inline-flex", "marginRight": "6px", "verticalAlign": "middle"}),
+                       POI_LIBELLES[t]], className="me-3", style={"fontSize": "0.85rem"})
+            for t in POI_PAR_CATEGORIE.get(categorie, POI_PAR_CATEGORIE["tous"])]
+
+def _calques(r, traces, categorie):
+    """(lignes, cercle, repères) de la carte : un trait par train (liseré blanc dessous), dernier kilomètre en pointillés, lieux de la catégorie autour de la destination."""
     dep, dest, gare = r["depart"], r["destination"], r["gare_arrivee"]
-    lignes = [dl.Polyline(positions=ligne, color=CARMILLON, weight=4) for ligne in r["trace"]]
+    lignes = []
+    for t in traces:
+        lignes.append(dl.Polyline(positions=t["points"], color="white", weight=9, opacity=0.9))
+        lignes.append(dl.Polyline(positions=t["points"], color=t["style"]["couleur"], weight=5, dashArray=t["style"]["tirets"],
+                                  lineCap="round" if t["style"]["cle"] in ("rer", "bus") else "butt"))
     reperes = [dl.Marker(position=[dep["lat"], dep["lon"]], children=[dl.Tooltip(f"Départ : {dep['nom']}")]),
                dl.Marker(position=[dest["lat"], dest["lon"]], children=[dl.Tooltip(f"Destination : {dest['nom']}")])]
     if gare:
-        lignes.append(dl.Polyline(positions=[[gare["lat"], gare["lon"]], [dest["lat"], dest["lon"]]], color=COLORBLIND_PALETTE[3], weight=3, dashArray="6 8"))
-        reperes.append(dl.CircleMarker(center=[gare["lat"], gare["lon"]], radius=7, color=CARMILLON, fillOpacity=0.9, children=[dl.Tooltip(f"Gare d'arrivée : {gare['nom']}")]))
-    couleur = COLORBLIND_PALETTE[2] if categorie == "evenement" else COLORBLIND_PALETTE[0]
-    reperes += [dl.CircleMarker(center=[p.lat, p.lon], radius=4, color=couleur, fillOpacity=0.7, children=[dl.Tooltip(p.nom or p.type)]) for p in r["pois"].itertuples()]
-    cercle = [dl.Circle(center=[dest["lat"], dest["lon"]], radius=RAYON_POI_KM * 1000, color=COLORBLIND_PALETTE[3], fillOpacity=0.1)]
+        lignes.append(dl.Polyline(positions=[[gare["lat"], gare["lon"]], [dest["lat"], dest["lon"]]], color="#333333", weight=3, dashArray="3 8"))
+        reperes.append(dl.CircleMarker(center=[gare["lat"], gare["lon"]], radius=8, color=CARMILLON, fillOpacity=0.9, children=[dl.Tooltip(f"Gare d'arrivée : {gare['nom']}")]))
+    reperes += [dl.DivMarker(position=[p["lat"], p["lon"]], iconOptions=dict(className="poi-pastille", iconSize=[26, 26], iconAnchor=[13, 13],
+                                                                             html=f'<div style="{_css(_pastille(p["type"]))}"><i class="fa-solid {POI_ICONES.get(p["type"], "fa-location-dot")}"></i></div>'),
+                             children=[dl.Tooltip(f"{p['nom'] or p['type']} · {POI_LIBELLES.get(p['type'], p['type'])} · {p['distance_km']:.1f} km de la destination")])
+                for p in r["pois"]]
+    cercle = [dl.Circle(center=[dest["lat"], dest["lon"]], radius=RAYON_POI_KM * 1000, color="#555555", weight=2, fillOpacity=0.05)]
     return lignes, cercle, reperes
+
+def _message(texte, niveau="muted"):
+    return html.Div(texte, className=f"text-{niveau}")
+
 
 @app.callback(
     [Output("kpi-distance", "children"), Output("kpi-intermodal", "children"), Output("kpi-statut", "children"),
-     Output("kpi-distance-detail", "children"), Output("kpi-intermodal-detail", "children"), Output("kpi-statut-detail", "children"),
-     Output("search-results", "children"),
-     Output("map-lines", "children"), Output("map-isochrones", "children"), Output("map-markers", "children"), Output("map", "viewport")],
+     Output("kpi-distance-detail", "children"), Output("kpi-intermodal-detail", "children"),
+     Output("store-resultat", "data"), Output("store-selection", "data"), Output("sens", "value")],
     Input("btn-search", "n_clicks"),
     [State("input-depart", "value"), State("input-arrivee", "value"),
      State("date-picker-aller", "date"), State("time-picker-aller", "value"),
      State("switch-ar", "value"), State("date-picker-retour", "date"), State("time-picker-retour", "value"),
      State("filter-categorie", "value")],
+    running=[(Output("btn-search", "disabled"), True, False)],
     prevent_initial_call=True
 )
-def update_map(n_clicks, depart, arrivee, date_aller, heure_aller, aller_retour, date_retour, heure_retour, categorie):
-    vide = ("-- km", "--", "--", "", "", "")
+def lancer_recherche(n_clicks, depart, arrivee, date_aller, heure_aller, aller_retour, date_retour, heure_retour, categorie):
+    """Interroge la base et l'API SNCF, puis range le résultat dans store-resultat : l'affichage (trajets, carte) s'en sert sans rappeler l'API."""
+    vide = ("-- km", "--", "--", "", "")
+    reset = ({"sens": "aller", "index": 0}, "aller")
     if not depart or not arrivee:
-        return (*vide, html.Div("Choisissez une gare de départ et une destination.", className="text-muted"), [], [], [], dash.no_update)
+        return (*vide, {"message": "Choisissez une gare de départ et une destination.", "niveau": "muted"}, *reset)
     try:
         quand = quand_depuis(date_aller, heure_aller) if date_aller else None
         retour = quand_depuis(date_retour, heure_retour) if aller_retour and 1 in aller_retour and date_retour else None
-        r = rechercher(depart, arrivee, quand=quand, retour=retour, categorie=categorie, engine=engine, reseau=reseau_ferre)
+        r = rechercher(depart, arrivee, quand=quand, retour=retour, categorie=categorie, engine=engine)
     except Exception as erreur:
-        return (*vide, html.Div(f"Recherche impossible : {type(erreur).__name__}", className="text-danger"), [], [], [], dash.no_update)
+        return (*vide, {"message": f"Recherche impossible : {type(erreur).__name__}", "niveau": "danger"}, *reset)
     if r is None:
-        return (*vide, html.Div("Lieu introuvable en base.", className="text-danger"), [], [], [], dash.no_update)
+        return (*vide, {"message": "Lieu introuvable en base.", "niveau": "danger"}, *reset)
 
     mode, detail_mode = r["dernier_km"]
-    km = r["distance_km"]
-    gare = r["gare_arrivee"]
-    co2 = r["trajets"][0]["co2_g"] if r["trajets"] else None
+    km, gare = r["distance_km"], r["gare_arrivee"]
     statut = "--" if r["faisable"] is None else "Faisable" if r["faisable"] else "Difficile"
+    r["pois"] = r["pois"].to_dict("records")
+    r["categorie"] = categorie
+    donnees = json.loads(json.dumps(r, default=str))          # datetimes → texte : le résultat voyage dans un dcc.Store
+    return (f"{km:.1f} km" if km is not None else "-- km", mode, statut, f"depuis {gare['nom']}" if gare else "", detail_mode, donnees, *reset)
+
+
+@app.callback(
+    Output("store-selection", "data", allow_duplicate=True),
+    [Input({"type": "option", "index": ALL}, "n_clicks"), Input("sens", "value")],
+    State("store-selection", "data"),
+    prevent_initial_call=True
+)
+def choisir_option(clics, sens, selection):
+    """Un clic sur un bloc choisit cette option ; Aller / Retour repart sur la première option."""
+    declencheur = ctx.triggered_id
+    if declencheur == "sens":
+        if sens == selection["sens"]:
+            raise PreventUpdate
+        return {"sens": sens, "index": 0}
+    if isinstance(declencheur, dict) and ctx.triggered[0]["value"]:        # n_clicks vide = bloc qui vient d'apparaître, pas un clic
+        return {"sens": selection["sens"], "index": declencheur["index"]}
+    raise PreventUpdate
+
+
+@app.callback(
+    [Output("options-trajets", "children"), Output("results-title", "children"), Output("poi-legend", "children"), Output("col-sens", "style"),
+     Output("kpi-statut-detail", "children"),
+     Output("map-lines", "children"), Output("map-isochrones", "children"), Output("map-markers", "children"), Output("map", "viewport")],
+    [Input("store-resultat", "data"), Input("store-selection", "data")]
+)
+def afficher_resultat(r, selection):
+    """Blocs des options et carte, d'après le résultat de la recherche et l'option choisie."""
+    if not r:
+        raise PreventUpdate
+    nouveau = "store-resultat.data" in ctx.triggered_prop_ids
+    cache, visible = {"display": "none"}, {"display": "block"}
+    if "message" in r:
+        return _message(r["message"], r["niveau"]), "Trajets proposés", [], cache, "", [], [], [], dash.no_update
+
+    dep, gare = r["depart"], r["gare_arrivee"]
+    retour = selection["sens"] == "retour" and bool(r["trajets_retour"])
+    trajets = r["trajets_retour"] if retour else r["trajets"]
+    index = min(selection["index"], max(len(trajets) - 1, 0))
+    de, vers = (gare, dep) if retour else (dep, gare)
+    titre = f"{'Retour' if retour else 'Aller'} · {de['nom']} → {vers['nom']}" if gare else "Trajets proposés"
+    liaison = ((de["lon"], de["lat"]), (vers["lon"], vers["lat"])) if gare else ((dep["lon"], dep["lat"]),) * 2
+
+    traces_options = [tracer_trajet(t, reseau_ferre, *liaison) for t in trajets]
+    traces = traces_options[index] if trajets else tracer_trajet(None, reseau_ferre, *liaison)
+    if r["erreur_api"]:
+        blocs = _message(f"Horaires indisponibles ({r['erreur_api']}). La liaison directe entre les gares est tracée.", "warning")
+    elif gare is None:
+        blocs = _message("Aucune gare d'arrivée connue pour ce lieu.", "warning")
+    elif not trajets:
+        blocs = _message("Aucun train trouvé à cette date (l'API couvre environ 30 jours).", "warning")
+    else:
+        blocs = dbc.Row([_carte_option(i, t, i == index, traces_options[i]) for i, t in enumerate(trajets)])
+
+    co2 = trajets[index].get("co2_g") if trajets else None
     detail_statut = f"Train : {co2 / 1000:.1f} kg CO₂e par voyageur" if co2 else ("Horaires indisponibles" if r["erreur_api"] else "")
-    lignes, cercle, reperes = _carte(r, categorie)
-    points = [p for ligne in r["trace"] for p in ligne] + [[r["destination"]["lat"], r["destination"]["lon"]]]
-    bounds = [[min(p[0] for p in points), min(p[1] for p in points)], [max(p[0] for p in points), max(p[1] for p in points)]]
-    return (f"{km:.1f} km" if km is not None else "-- km", mode, statut,
-            f"depuis {gare['nom']}" if gare else "", detail_mode, detail_statut,
-            _panneau_resultats(r), lignes, cercle, reperes, dict(bounds=bounds, transition="flyTo"))
+    lignes, cercle, reperes = _calques(r, traces, r["categorie"])
+    viewport = dash.no_update
+    if nouveau:
+        points = [p for t in traces for p in t["points"]] + [[r["destination"]["lat"], r["destination"]["lon"]]]
+        viewport = dict(bounds=[[min(p[0] for p in points), min(p[1] for p in points)], [max(p[0] for p in points), max(p[1] for p in points)]], transition="flyTo")
+    return blocs, titre, _legende_poi(r["categorie"]), visible if r["trajets_retour"] else cache, detail_statut, lignes, cercle, reperes, viewport
 
 if __name__ == "__main__":
     app.run(debug=True)

@@ -8,12 +8,13 @@ Usage :
     r = rechercher(depart_id, destination_id, quand="2026-10-12 08:00", retour="2026-10-14 18:00")
 
 rechercher() retourne un dict (None si un lieu est inconnu) : depart, destination, gare_arrivee, distance_km (destination → gare la plus proche),
-alentours (stations vélo et arrêts de bus près de la gare d'arrivée), dernier_km (mode, détail), faisable, trajets (Navitia, jusqu'à 3),
-retour (le premier trajet retour), erreur_api (texte, sinon None), trace (une polyligne [[lat, lon], …] par train du premier trajet),
-sur_voie (le tracé suit les voies), pois (lieux autour de la destination, selon la catégorie).
+alentours (stations vélo et arrêts de bus près de la gare d'arrivée), dernier_km (mode, détail), faisable, trajets (aller, Navitia, jusqu'à 3),
+trajets_retour (idem pour le retour, vide sans date de retour), erreur_api (texte, sinon None), pois (lieux autour de la destination, selon la catégorie).
+tracer_trajet() dessine un trajet : un tracé collé aux voies par train, avec la couleur et les tirets du service (style_ligne).
 Rien n'est stocké : l'API Navitia est appelée à chaque recherche (voir lib/navitia.py).
 """
 import math
+import re
 from datetime import datetime, time
 
 import pandas as pd
@@ -117,19 +118,68 @@ def quand_depuis(date, heure=None, maintenant=None):
     return maintenant.replace(microsecond=0) if jour == maintenant.date() else datetime.combine(jour, HEURE_DEFAUT)
 
 
-def _trace(trajet, reseau, depart, arrivee):
-    """(polylignes [[lat, lon], …], sur_voie) : une par train du trajet, collée aux voies. Sans trajet, la liaison directe entre les deux gares."""
-    couples = [(s["de_lonlat"], s["vers_lonlat"]) for s in (trajet or {}).get("sections", [])
-               if s["type"] == "public_transport" and s.get("de_lonlat") and s.get("vers_lonlat")] or [(depart, arrivee)]
-    lignes, sur_voie = [], True
-    for de, vers in couples:
-        points, ok = chemin(reseau, de, vers)
-        lignes.append([[lat, lon] for lon, lat in points])
-        sur_voie = sur_voie and ok
-    return lignes, sur_voie
+# Couleur proche de celle du service, et motif de trait différent (plein, tirets, pointillés) pour qu'on distingue les services sans les couleurs.
+STYLES = {
+    "inoui": ("TGV INOUI", "#9b0f5e", None),
+    "ouigo": ("OUIGO", "#e6007e", "14 8"),
+    "ter": ("TER / régional", "#0072b2", "6 6"),
+    "intercites": ("Intercités", "#2e7d32", "14 6 2 6"),
+    "rer": ("RER / Transilien", "#00a3a1", "1 9"),
+    "bus": ("Car / bus", "#e69f00", "2 12"),
+    "eurostar": ("Eurostar", "#00205b", "16 5 2 5 2 5"),
+    "trenitalia": ("Trenitalia", "#d1232a", "16 5 2 5 2 5"),
+    "renfe": ("Renfe AVE", "#7b3294", "16 5 2 5 2 5"),
+    "international": ("International", "#4b3c8f", "16 5 2 5 2 5"),
+    "inconnu": ("Train", "#555555", None),
+}
 
 
-def rechercher(depart_id, destination_id, quand=None, retour=None, categorie="tous", engine=None, reseau=None):
+def style_ligne(section):
+    """Style d'un train ou d'un car (une section Navitia) : {"cle", "libelle", "couleur", "tirets"}. tirets : motif Leaflet (« 14 8 »), None = trait plein."""
+    mode = (section.get("mode_physique") or "").lower()
+    texte = f"{section.get('ligne') or ''} {section.get('reseau') or ''}".lower()
+    if any(m in mode for m in ("bus", "car", "navette")) or re.search(r"\b(car|bus|navette)\b", texte):
+        cle = "bus"
+    elif "ouigo" in texte:
+        cle = "ouigo"
+    elif "inoui" in texte or "tgv" in texte:
+        cle = "inoui"
+    elif "intercit" in texte:
+        cle = "intercites"
+    elif "eurostar" in texte:
+        cle = "eurostar"
+    elif "frecciarossa" in texte or "trenitalia" in texte:
+        cle = "trenitalia"
+    elif "renfe" in texte or re.search(r"\bave\b", texte):
+        cle = "renfe"
+    elif re.search(r"\b(db|ice|lyria|thalys)\b", texte):
+        cle = "international"
+    elif re.search(r"\b(rer|transilien|tramtrain)\b", texte):
+        cle = "rer"
+    elif section.get("ligne") or section.get("reseau"):
+        cle = "ter"
+    else:
+        cle = "inconnu"
+    libelle, couleur, tirets = STYLES[cle]
+    return {"cle": cle, "libelle": libelle, "couleur": couleur, "tirets": tirets}
+
+
+def tracer_trajet(trajet, reseau, depart, arrivee):
+    """Un dict par train ou car du trajet : points [[lat, lon], …] collés aux voies, sur_voie, style (style_ligne) et libelle (« TER 880693 »).
+    `depart`, `arrivee` : (lon, lat) des gares, utilisées sans trajet pour tracer la liaison directe."""
+    sections = [s for s in (trajet or {}).get("sections", []) if s["type"] == "public_transport" and s.get("de_lonlat") and s.get("vers_lonlat")]
+    if not sections:
+        points, ok = chemin(reseau, depart, arrivee)
+        return [{"points": [[lat, lon] for lon, lat in points], "sur_voie": ok, "style": style_ligne({}), "libelle": "Liaison directe"}]
+    traces = []
+    for s in sections:
+        points, ok = chemin(reseau, tuple(s["de_lonlat"]), tuple(s["vers_lonlat"]))
+        traces.append({"points": [[lat, lon] for lon, lat in points], "sur_voie": ok, "style": style_ligne(s),
+                       "libelle": f"{s.get('ligne') or 'Train'} {s.get('numero') or ''}".strip()})
+    return traces
+
+
+def rechercher(depart_id, destination_id, quand=None, retour=None, categorie="tous", engine=None):
     """Prépare tout l'onglet pour un départ (id d'une gare) et une destination (id d'un lieu) : voir l'en-tête du module."""
     engine = engine or get_engine()
     depart, destination = _lieu(engine, depart_id), _lieu(engine, destination_id)
@@ -140,17 +190,14 @@ def rechercher(depart_id, destination_id, quand=None, retour=None, categorie="to
     proches = alentours(engine, gare["lat"], gare["lon"]) if gare else {"velo": 0, "bus": 0}
     resultat = {"depart": depart, "destination": destination, "gare_arrivee": gare, "distance_km": distance, "alentours": proches,
                 "dernier_km": dernier_km(distance, proches), "faisable": None if distance is None else distance <= SEUIL_VELO_BUS_KM,
-                "trajets": [], "retour": None, "erreur_api": None, "trace": [], "sur_voie": False,
+                "trajets": [], "trajets_retour": [], "erreur_api": None,
                 "pois": pois_autour(engine, destination["lat"], destination["lon"], categorie)}
     if gare is None or not depart["code_uic"] or not gare["code_uic"]:
         return resultat
     try:
         resultat["trajets"] = navitia.itineraires(navitia.id_gare(depart["code_uic"]), navitia.id_gare(gare["code_uic"]), quand=quand, nombre=MAX_TRAJETS)
         if retour is not None:
-            tous = navitia.itineraires(navitia.id_gare(gare["code_uic"]), navitia.id_gare(depart["code_uic"]), quand=retour, nombre=1)
-            resultat["retour"] = tous[0] if tous else None
+            resultat["trajets_retour"] = navitia.itineraires(navitia.id_gare(gare["code_uic"]), navitia.id_gare(depart["code_uic"]), quand=retour, nombre=MAX_TRAJETS)
     except RuntimeError as erreur:
         resultat["erreur_api"] = str(erreur)
-    resultat["trace"], resultat["sur_voie"] = _trace(resultat["trajets"][0] if resultat["trajets"] else None, reseau,
-                                                     (depart["lon"], depart["lat"]), (gare["lon"], gare["lat"]))
     return resultat

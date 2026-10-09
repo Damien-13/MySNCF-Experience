@@ -75,6 +75,7 @@ def _section(s):
         "type": s["type"], "mode": s.get("mode") or ("train" if s["type"] == "public_transport" else None),
         "duree_s": s["duration"], "de": s.get("from", {}).get("name"), "vers": s.get("to", {}).get("name"),
         "ligne": infos.get("commercial_mode"), "numero": infos.get("headsign"), "direction": infos.get("direction"),
+        "reseau": infos.get("network"), "mode_physique": infos.get("physical_mode"),
         "depart": _date(s["departure_date_time"]) if "departure_date_time" in s else None,
         "arrivee": _date(s["arrival_date_time"]) if "arrival_date_time" in s else None,
     }
@@ -83,7 +84,7 @@ def _section(s):
 def itineraires(depart, arrivee, quand=None, nombre=3):
     """Trajets en train entre deux lieux : gares (id_gare) ou positions « lon;lat ». `quand` : datetime ou « AAAA-MM-JJ HH:MM »
     (maintenant par défaut). Retourne une liste de trajets (vide s'il n'y en a pas) : duree_s, correspondances, depart, arrivee,
-    co2_g et sections (type, mode, duree_s, de, vers, de_lonlat, vers_lonlat, ligne, numero, direction, depart, arrivee)."""
+    co2_g et sections (type, mode, duree_s, de, vers, de_lonlat, vers_lonlat, ligne, numero, direction, reseau, mode_physique, depart, arrivee)."""
     quand = pd.Timestamp(quand).to_pydatetime() if quand is not None else datetime.now()
     statut, contenu = _get("/journeys", **{"from": depart, "to": arrivee, "datetime": quand.strftime("%Y%m%dT%H%M%S"), "count": nombre})
     if statut == 404 and contenu.get("error", {}).get("id") in ("no_origin", "no_destination", "no_solution"):

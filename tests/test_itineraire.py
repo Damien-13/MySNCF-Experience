@@ -88,25 +88,48 @@ def test_chemin_suit_la_voie_ou_se_replie_en_ligne_droite():
     assert chemin(None, (2.0, 48.0), (2.2, 48.0)) == ([[2.0, 48.0], [2.2, 48.0]], False)                     # sans réseau en base
 
 
+def test_style_ligne_donne_une_couleur_et_un_motif_par_service():
+    styles = {nom: itineraire.style_ligne(s) for nom, s in {
+        "inoui": {"ligne": "TGV INOUI", "mode_physique": "Train grande vitesse"},
+        "ouigo": {"ligne": "OUIGO"},
+        "ter": {"ligne": "ZOU !", "reseau": "ZOU !", "mode_physique": "Train"},
+        "intercites": {"ligne": "INTERCITES"},
+        "rer": {"ligne": "RER"},
+        "bus": {"ligne": "ZOU !", "mode_physique": "Autocar"},
+        "eurostar": {"ligne": "Eurostar"},
+        "inconnu": {},
+    }.items()}
+    assert {nom: st["cle"] for nom, st in styles.items()} == {nom: nom for nom in styles}
+    assert len({(st["couleur"], st["tirets"]) for st in styles.values()}) == len(styles)          # aucun service ne ressemble à un autre
+    assert styles["inoui"]["tirets"] is None and styles["ouigo"]["tirets"]
+
+
+def test_tracer_trajet_un_trace_par_train_et_liaison_directe_sans_trajet():
+    reseau = construire_reseau(VOIE)
+    traces = itineraire.tracer_trajet(_trajet((2.0, 48.0), (2.2, 48.0)), reseau, (2.0, 48.0), (2.2, 48.0))
+    assert len(traces) == 1 and traces[0]["sur_voie"] and traces[0]["libelle"] == "TGV INOUI 6101"
+    assert traces[0]["points"][0] == [48.0, 2.0]                                                   # [lat, lon] pour la carte
+    direct = itineraire.tracer_trajet(None, reseau, (2.0, 48.0), (2.2, 48.0))
+    assert len(direct) == 1 and direct[0]["libelle"] == "Liaison directe"
+
+
 def test_rechercher_assemble_tout(engine, monkeypatch):
     appels = []
     monkeypatch.setattr(navitia, "itineraires", lambda a, b, quand=None, nombre=3: appels.append((a, b)) or [_trajet((2.0, 48.0), (2.2, 48.0))])
-    r = itineraire.rechercher(1, 10, quand=datetime(2026, 10, 12, 8), retour=datetime(2026, 10, 14, 18), engine=engine, reseau=construire_reseau(VOIE))
+    r = itineraire.rechercher(1, 10, quand=datetime(2026, 10, 12, 8), retour=datetime(2026, 10, 14, 18), engine=engine)
     assert appels == [("stop_area:SNCF:87000001", "stop_area:SNCF:87000002"), ("stop_area:SNCF:87000002", "stop_area:SNCF:87000001")]
     assert r["gare_arrivee"]["nom"] == "Gare B" and r["distance_km"] == 1.0 and r["faisable"] is True
     assert r["dernier_km"][0] == "Marche à pied" and r["alentours"] == {"velo": 1, "bus": 1}
-    assert r["retour"] is not None and r["erreur_api"] is None and r["sur_voie"] is True
-    assert len(r["trace"]) == 1 and r["trace"][0][0] == [48.0, 2.0]                                         # polyligne en [lat, lon] pour la carte
+    assert len(r["trajets"]) == 1 and len(r["trajets_retour"]) == 1 and r["erreur_api"] is None
 
 
-def test_rechercher_sans_api_garde_les_kpi_et_trace_la_liaison_directe(engine, monkeypatch):
+def test_rechercher_sans_retour_ni_api(engine, monkeypatch):
     def en_panne(*args, **kwargs):
         raise RuntimeError("API SNCF injoignable (ConnectionError)")
     monkeypatch.setattr(navitia, "itineraires", en_panne)
-    r = itineraire.rechercher(1, 12, engine=engine, reseau=construire_reseau(VOIE))
-    assert r["erreur_api"] == "API SNCF injoignable (ConnectionError)" and r["trajets"] == []
-    assert r["distance_km"] == 22.0 and r["faisable"] is False and r["dernier_km"][0] == "Voiture / Taxi"
-    assert len(r["trace"]) == 1                                                                              # liaison directe entre les deux gares
+    r = itineraire.rechercher(1, 12, engine=engine)
+    assert r["erreur_api"] == "API SNCF injoignable (ConnectionError)" and r["trajets"] == [] and r["trajets_retour"] == []
+    assert r["distance_km"] == 22.0 and r["faisable"] is False and r["dernier_km"][0] == "Voiture / Taxi"     # les KPI restent calculés sans l'API
 
 
 def test_rechercher_lieu_inconnu(engine):
