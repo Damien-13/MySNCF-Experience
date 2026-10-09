@@ -54,6 +54,7 @@ def test_trains_en_cours_a_une_heure_donnee(engine):
     assert [t["id"] for t in trains] == ["c1"]                           # ni le car, ni le bus, ni le service qui ne roule pas ce jour-là
     t = trains[0]
     assert t["libelle"] == "TGV INOUI 6101" and t["style"]["cle"] == "inoui" and (t["de"], t["vers"]) == ("Gare A", "Gare B")
+    assert t["sprite"] == "inoui" and t["longueur_m"] == 200 and t["rapport"] > 10             # l'image du train et sa taille réelle, pour le navigateur
     assert t["points"][0] == [48.0, 2.0] and t["points"][-1] == [48.0, 2.2]      # converti en [lat, lon] pour la carte
     assert t["t1"] - t["t0"] == 3600 and datetime.fromtimestamp(t["t0"]) == datetime(2026, 10, 12, 8, 0)
 

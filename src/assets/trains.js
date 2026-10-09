@@ -10,13 +10,13 @@
  *   tous   : les trains en circulation sur tout le réseau (même forme, depart / arrivee en secondes depuis l'époque).
  *   horloge : {mode: "reel"} ou {mode: "sim", t0_reel: secondes} (le trajet défile à VITESSE_SIM fois la vitesse réelle).
  *
- * Taille : un train fait sa longueur réelle (100 à 200 m) à l'échelle de la carte, donc il grandit en zoomant et reste minuscule en dézoomant.
- * Trop petit pour qu'on le reconnaisse (moins de SEUIL_IMAGE_PX), il devient une pastille.
+ * Taille : un train fait sa longueur réelle (100 à 200 m) à l'échelle de la carte, donc il grandit en zoomant et rapetisse en dézoomant.
+ * C'est toujours son image : à très grande échelle, 200 m ne feraient pas un pixel, donc il ne descend jamais sous LONGUEUR_MIN_PX pour rester visible.
  * Clic sur un train : fenêtre d'informations, et la caméra le suit jusqu'à la fermeture de la fenêtre ou un déplacement de la carte à la main.
  */
 (function () {
   const VITESSE_SIM = 120;           // 1 seconde réelle = 2 minutes de trajet, comme lib/suivi.py
-  const SEUIL_IMAGE_PX = 24;         // en dessous, pastille au lieu de l'image du train
+  const LONGUEUR_MIN_PX = 16;        // plancher de longueur à l'écran : sans lui, un train de 200 m disparaîtrait en dézoomant (mettre 0 pour l'échelle exacte)
   const LARGEUR_MAX_PX = 700;
   const ETIREMENT = 1.8;             // les trains vus du dessus sont très fins : on les élargit un peu pour qu'on les reconnaisse
   const PAS_TOUS_MS = 200;           // les trains « tous réseaux » sont recalculés 5 fois par seconde (il y en a des milliers)
@@ -103,7 +103,8 @@
       ? `<img class="tj-img" src="/sprite-train/${e.sprite}.png" alt="">`
       : "";
     const icone = e.sprite ? "fa-train" : "fa-bus";
-    const html = `<div class="tj">${sprite}<div class="tj-pastille" style="background:${e.style.couleur}"><i class="fa-solid ${icone}"></i></div></div>`;
+    const pastille = e.sprite ? "" : `<div class="tj-pastille" style="background:${e.style.couleur}"><i class="fa-solid ${icone}"></i></div>`;   // seulement pour un car
+    const html = `<div class="tj">${sprite}${pastille}</div>`;
     const m = L.marker([e.points[0][0], e.points[0][1]], {
       icon: L.divIcon({ className: "train-js", html, iconSize: [0, 0] }), zIndexOffset: tous ? 500 : 1000, keyboard: false,
     }).addTo(carte);
@@ -139,19 +140,17 @@
   // Taille d'un repère à l'échelle de la carte : sa longueur réelle en mètres divisée par les mètres que représente un pixel.
   function afficher(m, e, pos, carte) {
     m.setLatLng([pos.lat, pos.lon]);
+    if (!m._img) return;                              // sans image de train (car) : la pastille reste
     const mpp = (156543.03392 * Math.cos((pos.lat * Math.PI) / 180)) / Math.pow(2, carte.getZoom());
-    const px = e.longueur_m / mpp;
-    if (m._img && px >= SEUIL_IMAGE_PX) {
-      const l = Math.min(px, LARGEUR_MAX_PX), h = Math.max((l / e.rapport) * ETIREMENT, 4);
-      m._img.style.display = "block";
-      m._img.style.width = l.toFixed(1) + "px";
-      m._img.style.height = h.toFixed(1) + "px";
-      m._img.style.transform = `rotate(${(pos.cap - 90).toFixed(1)}deg)`;
-      m._pastille.style.display = "none";
-    } else {
-      if (m._img) m._img.style.display = "none";
-      m._pastille.style.display = "flex";
-    }
+    const l = Math.min(Math.max(e.longueur_m / mpp, LONGUEUR_MIN_PX), LARGEUR_MAX_PX);
+    const h = Math.max((l / e.rapport) * ETIREMENT, 4), deg = Math.round(pos.cap - 90);
+    const d = m._derniere;
+    if (d && Math.abs(d.l - l) < 0.4 && d.deg === deg) return;       // rien n'a changé à l'écran : on ne touche pas au DOM (il y a des milliers de trains)
+    m._derniere = { l, deg };
+    m._img.style.display = "block";
+    m._img.style.width = l.toFixed(1) + "px";
+    m._img.style.height = h.toFixed(1) + "px";
+    m._img.style.transform = `rotate(${deg}deg)`;
   }
 
   function retirer(table, clef) {
@@ -179,7 +178,7 @@
     });
     Object.keys(S.sel).forEach((clef) => { if (!vus.has(clef)) retirer(S.sel, clef); });
 
-    // 2. Tous les trains du réseau (points seulement : il y en a des milliers)
+    // 2. Tous les trains du réseau (seuls ceux de l'écran sont dessinés : il y en a des milliers)
     if (S.toutesActives && performance.now() - S.dernierTous >= PAS_TOUS_MS) {
       S.dernierTous = performance.now();
       majTous(carte, t);
@@ -217,15 +216,8 @@
       S.tousData[clef] = e;
       if (S.suivi !== clef && !zone.contains([pos.lat, pos.lon])) continue;   // hors de l'écran : pas de repère
       vus.add(clef);
-      if (!S.tousMarq[clef]) {
-        const m = L.circleMarker([pos.lat, pos.lon], { radius: 4, color: "#ffffff", weight: 1, fillColor: e.style.couleur, fillOpacity: 0.95, renderer: S.canvas || (S.canvas = L.canvas({ padding: 0.3 })) }).addTo(carte);
-        m.bindPopup("", { autoPan: false, className: "popup-train" });
-        m.on("click", () => { S.suivi = clef; carte.getZoom() < 9 && carte.setZoom(9, { animate: false }); m.setPopupContent(contenu(e, maintenant())); m.openPopup(); });
-        m.on("popupclose", () => { if (S.suivi === clef) S.suivi = null; });
-        S.tousMarq[clef] = m;
-      }
-      S.tousMarq[clef].setLatLng([pos.lat, pos.lon]);
-      S.tousMarq[clef].setRadius(carte.getZoom() >= 11 ? 6 : carte.getZoom() >= 8 ? 4.5 : 3.5);
+      if (!S.tousMarq[clef]) S.tousMarq[clef] = creerRepere(carte, e, clef, true);
+      afficher(S.tousMarq[clef], e, pos, carte);
     }
     Object.keys(S.tousMarq).forEach((clef) => { if (!vus.has(clef)) retirer(S.tousMarq, clef); });
   }

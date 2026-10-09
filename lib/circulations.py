@@ -15,6 +15,7 @@ import sqlalchemy as sa
 
 from lib.db.connection import get_engine
 from lib.itineraire import style_ligne
+from lib import sprites
 from lib.reseau_ferre import TYPES_HORS_RAIL
 
 MAX_POINTS = 12                 # points gardés par tracé : le dashboard n'affiche que des repères pour tout le réseau
@@ -64,14 +65,15 @@ def _services(engine, jour):
 
 def en_cours(maintenant=None, engine=None, fenetre_s=FENETRE_S):
     """Trains qui roulent à `maintenant` ou partent dans `fenetre_s` secondes : un dict par segment, avec id (la circulation, pour garder le même repère
-    d'un arrêt au suivant), libelle, style, de, vers, points [[lat, lon], …], t0, t1 (secondes depuis l'époque), retard_min (0), marche (faux)."""
+    d'un arrêt au suivant), libelle, style, sprite / longueur_m / rapport (l'image du train et sa taille réelle, voir lib/sprites.py), de, vers, points [[lat, lon], …],
+    t0, t1 (secondes depuis l'époque), retard_min (0), marche (faux)."""
     engine = engine or get_engine()
     maintenant = maintenant or datetime.now()
     donnees = charger(engine)
     if not donnees["traces"]:
         return []
     minuit = datetime(maintenant.year, maintenant.month, maintenant.day)
-    trains = []
+    trains, apparences = [], {}
     # Les horaires après minuit (au-delà de 86400 s) appartiennent au service de la veille : on regarde aujourd'hui et hier.
     for decalage in (0, 1):
         debut_jour = minuit - timedelta(days=decalage)
@@ -84,8 +86,10 @@ def en_cours(maintenant=None, engine=None, fenetre_s=FENETRE_S):
             if trace is None:
                 continue
             numero = f" {ligne.numero}" if ligne.numero else ""
+            libelle = f"{ligne.type_transport or 'Train'}{numero}"
+            apparence = apparences.setdefault((ligne.style["cle"], ligne.type_transport or ""), sprites.infos(ligne.style["cle"], ligne.type_transport or ""))
             trains.append({
-                "id": ligne.circulation, "libelle": f"{ligne.type_transport or 'Train'}{numero}", "style": ligne.style,
+                **apparence, "id": ligne.circulation, "libelle": libelle, "style": ligne.style,
                 "de": donnees["noms"].get(ligne.a), "vers": donnees["noms"].get(ligne.b),
                 "points": [[round(lat, 4), round(lon, 4)] for lon, lat in _decimer(trace[0])],        # trace_trajet stocke [lon, lat]
                 "t0": debut_jour.timestamp() + ligne.t0, "t1": debut_jour.timestamp() + ligne.t1, "retard_min": 0, "marche": False,

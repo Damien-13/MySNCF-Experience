@@ -5,7 +5,7 @@
   position: absolute; left: 0; top: 0; translate: -50% -50%; transform-origin: center;
   display: none; max-width: none; filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.75)); pointer-events: auto;
 }
-.train-js .tj-pastille {
+.train-js .tj-pastille {   /* seulement pour un car, qui n'a pas d'image de train */
   position: absolute; left: 0; top: 0; translate: -50% -50%; width: 20px; height: 20px; border-radius: 50%;
   border: 2px solid #fff; color: #fff; display: flex; align-items: center; justify-content: center;
   font-size: 10px; box-shadow: 0 1px 5px rgba(0, 0, 0, 0.55);
