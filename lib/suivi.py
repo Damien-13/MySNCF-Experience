@@ -107,7 +107,7 @@ def suivre(etapes, maintenant):
         attente = premier - maintenant
         jours, heures = attente.days, attente.seconds // 3600
         dans = f"dans {jours} j {heures} h" if jours else f"dans {heures} h {attente.seconds % 3600 // 60:02d}" if heures else f"dans {attente.seconds // 60} min"
-        return {"trains": [], "message": f"Le premier train part le {premier:%d/%m} à {_heure(premier)} ({dans}). Utilisez « Simuler le trajet » pour le voir rouler."}
+        return {"trains": [], "message": f"Le premier train part le {premier:%d/%m} à {_heure(premier)} ({dans})."}
     if maintenant > dernier:
         return {"trains": [], "message": f"Trajet terminé (arrivée à {_heure(dernier)})."}
     return {"trains": [], "message": "Correspondance : prochain train en gare."}

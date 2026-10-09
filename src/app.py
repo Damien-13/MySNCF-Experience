@@ -170,6 +170,12 @@ def generate_decision_table(theme="light"):
 # ==============================================================================
 # 4. LAYOUT DE L'APPLICATION
 # ==============================================================================
+HAUTEUR_CARTE = "max(640px, calc(100vh - 240px))"      # toute la hauteur de l'écran sous les KPI, pour ne pas avoir à descendre
+# Panneau des trajets (par-dessus la carte, à droite du panneau de recherche) et bouton pour le rouvrir.
+STYLE_PANNEAU = {"position": "absolute", "bottom": "16px", "left": "376px", "right": "16px", "maxHeight": "58%", "overflowY": "auto", "zIndex": "1000",
+                 "borderRadius": "15px", "boxShadow": "0px 4px 15px rgba(0,0,0,0.3)"}
+STYLE_OUVRIR = {"position": "absolute", "bottom": "16px", "left": "376px", "zIndex": "1000", "backgroundColor": CARMILLON, "border": "none", "fontWeight": "bold",
+                "boxShadow": "0px 4px 15px rgba(0,0,0,0.3)"}
 init_colors = THEME_COLORS["light"]
 gares_opts = get_gares_options()
 hours_opts = [{'label': f"{h:02d}:00", 'value': f"{h:02d}:00"} for h in range(5, 24)]
@@ -190,10 +196,8 @@ app.layout = dbc.Container(id="main-container", style={"backgroundColor": init_c
     
     # BANDEAU TOP BAR ÉPURÉ (Juste Logo et Thème)
     dbc.Row(id="top-bar", style={"backgroundColor": init_colors["card_bg"], "borderRadius": "8px", **transition_style}, className="p-3 mb-4 shadow-sm align-items-center", children=[
-        dbc.Col(html.Img(id="logo-img", src=LOGO_SRC, style={"maxHeight": "70px", "objectFit": "contain", "borderRadius": "8px", "padding": "5px"}), width=4, className="text-start"),
-        dbc.Col(dbc.Button([html.I(className="fa-solid fa-train-subway me-2"), html.Span("Tous les trains en direct", id="btn-tous-texte")], id="btn-tous", color="secondary", outline=True, active=False),
-                width=4, className="text-center"),
-        dbc.Col(dbc.Checklist(options=[{"label": "☀️ Clair / 🌙 Sombre", "value": "dark"}], value=[], id="theme-switch", switch=True, className="fw-bold d-flex justify-content-end"), width=4),
+        dbc.Col(html.Img(id="logo-img", src=LOGO_SRC, style={"maxHeight": "70px", "objectFit": "contain", "borderRadius": "8px", "padding": "5px"}), width=6, className="text-start"),
+        dbc.Col(dbc.Checklist(options=[{"label": "☀️ Clair / 🌙 Sombre", "value": "dark"}], value=[], id="theme-switch", switch=True, className="fw-bold d-flex justify-content-end"), width=6),
     ]),
 
     # ONGLETS
@@ -216,7 +220,7 @@ app.layout = dbc.Container(id="main-container", style={"backgroundColor": init_c
 
                 dbc.Row([
                     dbc.Col([
-                        dbc.Card(id="card-map", style={"border": "none", "backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "height": "650px", "position": "relative", "overflow": "hidden", **transition_style}, children=[
+                        dbc.Card(id="card-map", style={"border": "none", "backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "height": HAUTEUR_CARTE, "position": "relative", "overflow": "hidden", **transition_style}, children=[
                             dcc.Loading(custom_spinner=custom_spinner, target_components={"map-lines": "children", "map-isochrones": "children", "map-markers": "children"}, children=[
                                 html.Div(style={"position": "relative"}, children=[
                                     
@@ -265,10 +269,32 @@ app.layout = dbc.Container(id="main-container", style={"backgroundColor": init_c
                                             value="tous", className="fw-bold mb-4", style={"fontSize": "0.85rem"}
                                         ),
                                         
-                                        dbc.Button([html.I(className="fa-solid fa-magnifying-glass me-2"), "Rechercher"], id="btn-search", style={"backgroundColor": CARMILLON, "border": "none", "width": "100%", "fontWeight": "bold", "padding": "10px"})
+                                        dbc.Button([html.I(className="fa-solid fa-magnifying-glass me-2"), "Rechercher"], id="btn-search", style={"backgroundColor": CARMILLON, "border": "none", "width": "100%", "fontWeight": "bold", "padding": "10px"}),
+                                        dbc.Button([html.I(className="fa-solid fa-train-subway me-2"), html.Span("Tous les trains en direct", id="btn-tous-texte")], id="btn-tous",
+                                                   color="secondary", outline=True, className="w-100 mt-2", style={"fontWeight": "bold", "fontSize": "0.9rem"}),
                                     ]),
 
-                                    dl.Map(id="map", center=[46.2, 3.5], zoom=5, style={"width": "100%", "height": "650px", "display": "block", "margin": "0"}, children=[
+                                    # TRAJETS PROPOSÉS, par-dessus la carte : un bloc cliquable par option, Aller / Retour, avec un bouton pour fermer et rouvrir
+                                    dbc.Button([html.I(className="fa-solid fa-route me-2"), "Afficher les trajets"], id="btn-ouvrir", style={**STYLE_OUVRIR, "display": "none"}),
+                                    html.Div(id="panneau-resultats", style={**STYLE_PANNEAU, "display": "none"}, children=[
+                                        dbc.Card(id="card-results", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "border": "none", **transition_style}, children=[dbc.CardBody([
+                                            html.Div(className="d-flex flex-wrap align-items-center gap-3 mb-2", children=[
+                                                html.H5(id="results-title", children="Trajets proposés", className="mb-0"),
+                                                html.Div(dbc.RadioItems(id="sens", options=[{"label": "Aller", "value": "aller"}, {"label": "Retour", "value": "retour"}], value="aller", inline=True,
+                                                                        className="btn-group", inputClassName="btn-check", labelClassName="btn btn-outline-secondary btn-sm", labelCheckedClassName="active"),
+                                                         id="col-sens", style={"display": "none"}),
+                                                dbc.Button(html.I(className="fa-solid fa-xmark"), id="btn-fermer", color="light", size="sm", className="ms-auto", title="Masquer les trajets"),
+                                            ]),
+                                            html.Div(className="d-flex flex-wrap align-items-center gap-3 mb-2", children=[
+                                                dbc.Button([html.I(className="fa-solid fa-play me-2"), "Simuler le trajet"], id="btn-sim", color="secondary", outline=True, size="sm"),
+                                                html.Div(id="suivi-etat", style={"fontSize": "0.85rem", "opacity": 0.85}),
+                                            ]),
+                                            html.Div(id="poi-legend", className="mb-2"),
+                                            dcc.Loading(type="circle", color=CARMILLON, children=html.Div(id="options-trajets", children=html.Div("Choisissez une gare de départ et une destination, puis lancez la recherche.", className="text-muted"))),
+                                        ])]),
+                                    ]),
+
+                                    dl.Map(id="map", center=[46.2, 3.5], zoom=5, style={"width": "100%", "height": HAUTEUR_CARTE, "display": "block", "margin": "0"}, children=[
                                         dl.TileLayer(id="map-tiles", url=init_colors["tiles"]),
                                         dl.LayerGroup(id="map-lines"), dl.LayerGroup(id="map-isochrones"), dl.LayerGroup(id="map-markers")
                                     ])
@@ -277,25 +303,6 @@ app.layout = dbc.Container(id="main-container", style={"backgroundColor": init_c
                         ])
                     ], width=12)
                 ]),
-
-                # TRAJETS PROPOSÉS : un bloc cliquable par option, Aller / Retour
-                dbc.Row(className="mt-4", children=[
-                    dbc.Col(dbc.Card(id="card-results", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "border": "none", **transition_style}, children=[dbc.CardBody([
-                        dbc.Row(className="align-items-center g-3 mb-3", children=[
-                            dbc.Col(html.H5(id="results-title", children="Trajets proposés", className="mb-0"), xs=12, lg=5),
-                            dbc.Col(dbc.RadioItems(id="sens", options=[{"label": "Aller", "value": "aller"}, {"label": "Retour", "value": "retour"}], value="aller", inline=True,
-                                                   className="btn-group", inputClassName="btn-check", labelClassName="btn btn-outline-secondary", labelCheckedClassName="active"),
-                                    id="col-sens", xs=12, lg=3, style={"display": "none"}),
-                            dbc.Col(html.Div(id="poi-legend"), xs=12, lg=4, className="text-lg-end"),
-                        ]),
-                        dbc.Row(className="align-items-center g-3 mb-3", children=[
-                            dbc.Col(dbc.ButtonGroup([dbc.Button([html.I(className="fa-solid fa-satellite-dish me-2"), "Temps réel"], id="btn-reel", color="secondary", outline=True, size="sm", active=True),
-                                                     dbc.Button([html.I(className="fa-solid fa-play me-2"), "Simuler le trajet"], id="btn-sim", color="secondary", outline=True, size="sm")]), xs=12, lg=4),
-                            dbc.Col(html.Div(id="suivi-etat", style={"fontSize": "0.9rem", "opacity": 0.85}), xs=12, lg=8),
-                        ]),
-                        dcc.Loading(type="circle", color=CARMILLON, children=html.Div(id="options-trajets", children=html.Div("Choisissez une gare de départ et une destination, puis lancez la recherche.", className="text-muted"))),
-                    ])]), width=12)
-                ])
             ])
         ]),
 
@@ -426,7 +433,7 @@ def update_ui_and_graphs(theme_values, categorie):
         search_panel_st, logo_st, search_bar_t2_st,
         card_st, card_st, card_st,
         card_st, card_st, card_st,
-        {"backgroundColor": colors["card_bg"], "color": colors["text"], "border": "none", "height": "650px", "position": "relative", "overflow": "hidden", **transition_style},
+        {"backgroundColor": colors["card_bg"], "color": colors["text"], "border": "none", "height": HAUTEUR_CARTE, "position": "relative", "overflow": "hidden", **transition_style},
         {"backgroundColor": colors["card_bg"], "color": colors["text"], "border": "none", "marginBottom": "20px", **transition_style},
         {"backgroundColor": colors["card_bg"], "color": colors["text"], "border": "none", "marginBottom": "20px", **transition_style},
         card_st, card_st,
@@ -465,7 +472,7 @@ def _carte_option(i, trajet, actif, traces, etiquettes=()):
                                                    html.Span("" if t["marche"] else f" · {t['style']['libelle']}", style={"opacity": 0.7})]) for t in traces]
     co2 = trajet.get("co2_g")
     retard = max([sec.get("retard_min") or 0 for sec in trajet["sections"] if sec["type"] == "public_transport"] or [0])
-    return dbc.Col(xs=12, lg=4, className="mb-3", children=html.Div(id={"type": "option", "index": i}, n_clicks=0, role="button", tabIndex=0, children=[
+    return html.Div(style={"flex": "0 0 285px"}, children=html.Div(id={"type": "option", "index": i}, n_clicks=0, role="button", tabIndex=0, children=[
         *([html.Div(puces, className="mb-2")] if puces else []),
         html.Div([html.Span(f"Option {i + 1}", className="badge me-2", style={"backgroundColor": CARMILLON if actif else "#6c757d"}),
                   html.Span(f"{_heure(trajet['depart'])} → {_heure(trajet['arrivee'])}", className="fs-4 fw-bold")]),
@@ -615,7 +622,8 @@ def afficher_resultat(r, selection, categorie):
         blocs = _message("Aucun train trouvé à cette date (l'API couvre environ 30 jours).", "warning")
     else:
         etiquettes = etiquettes_trajets(trajets)
-        blocs = dbc.Row([_carte_option(i, t, i == index, traces_options[i], etiquettes[i]) for i, t in enumerate(trajets)])
+        blocs = html.Div([_carte_option(i, t, i == index, traces_options[i], etiquettes[i]) for i, t in enumerate(trajets)],
+                         style={"display": "flex", "gap": "12px", "overflowX": "auto", "paddingBottom": "6px"})
 
     co2 = trajets[index].get("co2_g") if trajets else None
     detail_statut = f"Train : {co2 / 1000:.1f} kg CO₂e par voyageur" if co2 else ("Horaires indisponibles" if r["erreur_api"] else "")
@@ -634,25 +642,40 @@ def afficher_resultat(r, selection, categorie):
 
 @app.callback(
     Output("store-horloge", "data", allow_duplicate=True),
-    [Input("btn-reel", "n_clicks"), Input("btn-sim", "n_clicks")],
+    Input("btn-sim", "n_clicks"),
+    State("store-horloge", "data"),
     prevent_initial_call=True
 )
-def choisir_horloge(clics_reel, clics_sim):
-    """« Temps réel » : l'heure de l'ordinateur. « Simuler » : le trajet défile à partir de son départ, à vitesse accélérée."""
-    if ctx.triggered_id == "btn-sim":
-        return {"mode": "sim", "t0_reel": time.time()}
-    return {"mode": "reel"}
+def basculer_simulation(clics, horloge):
+    """Par défaut le suivi est en temps réel. « Simuler le trajet » le fait défiler depuis son départ à vitesse accélérée ; le même bouton arrête la simulation."""
+    if horloge and horloge.get("mode") == "sim":
+        return {"mode": "reel"}
+    return {"mode": "sim", "t0_reel": time.time()}
 
 
 @app.callback(
-    [Output("suivi-etat", "children"), Output("btn-reel", "active"), Output("btn-sim", "active")],
+    [Output("panneau-resultats", "style"), Output("btn-ouvrir", "style")],
+    [Input("btn-fermer", "n_clicks"), Input("btn-ouvrir", "n_clicks"), Input("store-resultat", "data")],
+    prevent_initial_call=True
+)
+def ouvrir_ou_fermer_les_trajets(fermer, ouvrir, resultat):
+    """Le panneau des trajets s'ouvre à chaque recherche ; la croix le masque et « Afficher les trajets » le rouvre."""
+    if ctx.triggered_id == "store-resultat" and not resultat:
+        raise PreventUpdate
+    ouvert = ctx.triggered_id != "btn-fermer"
+    return {**STYLE_PANNEAU, "display": "block" if ouvert else "none"}, {**STYLE_OUVRIR, "display": "none" if ouvert else "block"}
+
+
+@app.callback(
+    [Output("suivi-etat", "children"), Output("btn-sim", "active"), Output("btn-sim", "children")],
     [Input("tick", "n_intervals"), Input("store-etapes", "data"), Input("store-horloge", "data")]
 )
 def etat_du_suivi(_, etapes, horloge):
     """Texte d'état (où en est le train) chaque seconde ; les trains eux-mêmes sont animés dans le navigateur (src/assets/trains.js)."""
     simulation = bool(horloge) and horloge.get("mode") == "sim"
+    bouton = [html.I(className="fa-solid fa-stop me-2"), "Arrêter la simulation"] if simulation else [html.I(className="fa-solid fa-play me-2"), "Simuler le trajet"]
     if not etapes:
-        return "", not simulation, simulation
+        return "", simulation, bouton
     maintenant = datetime.now()
     if simulation:
         departs = [datetime.fromisoformat(e["depart"]) for e in etapes if e.get("depart") and not e["marche"]]
@@ -660,7 +683,7 @@ def etat_du_suivi(_, etapes, horloge):
             maintenant = suivi.horloge_simulee(min(departs), datetime.fromtimestamp(horloge["t0_reel"]), maintenant)
     etat = suivi.suivre(etapes, maintenant)
     entete = f"Simulation · {maintenant:%d/%m %H:%M} — " if simulation else f"Temps réel · {maintenant:%H:%M} — "
-    return entete + etat["message"], not simulation, simulation
+    return entete + etat["message"], simulation, bouton
 
 
 @app.callback(

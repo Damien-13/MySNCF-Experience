@@ -269,8 +269,11 @@
         S.perdu = null;
         if (performance.now() >= S.pauseSuivi) {
           // le train reste dans la partie de la carte que le panneau de recherche ne cache pas
-          const panneau = document.getElementById("search-panel");
-          const cible = carte.getSize().divideBy(2).add([panneau && carte.getSize().x > 700 ? (panneau.offsetWidth + 40) / 2 : 0, 0]);
+          // (à droite du panneau de recherche, au-dessus du panneau des trajets quand il est ouvert)
+          const panneau = document.getElementById("search-panel"), trajets = document.getElementById("panneau-resultats");
+          const dx = panneau && carte.getSize().x > 700 ? (panneau.offsetWidth + 40) / 2 : 0;
+          const dy = trajets && trajets.offsetParent !== null ? -(trajets.offsetHeight + 16) / 2 : 0;
+          const cible = carte.getSize().divideBy(2).add([dx, dy]);
           const decalage = carte.latLngToContainerPoint([e._pos.lat, e._pos.lon]).subtract(cible);
           if (Math.abs(decalage.x) + Math.abs(decalage.y) > 0.5) carte.panBy(decalage, { animate: false });
         }
