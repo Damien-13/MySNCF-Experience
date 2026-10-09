@@ -15,14 +15,14 @@ Rien n'est stocké : l'API Navitia est appelée à chaque recherche (voir lib/na
 """
 import math
 import re
-from datetime import date, datetime, time, timedelta
+from datetime import datetime, time, timedelta
 
 import pandas as pd
 import sqlalchemy as sa
 
 from lib import navitia
 from lib.db.connection import get_engine
-from lib.reseau_ferre import chemin
+from lib.reseau_ferre import chemin, chemin_par_arrets
 
 SEUIL_PIED_KM = 1.5
 SEUIL_VELO_BUS_KM = 5.0
@@ -263,7 +263,7 @@ def _horaires(s):
 def tracer_trajet(trajet, reseau, depart, arrivee):
     """Un dict par étape du trajet, dans l'ordre : points [[lat, lon], …], sur_voie, style (style_ligne), libelle (« TER 880693 »), marche (vrai à pied),
     de, vers (noms des gares), depart, arrivee, retard_min (voir lib/suivi.py : ils servent à placer le train).
-    Les trains sont collés aux voies ; un car passe par la suite de ses arrêts (droit d'un arrêt au suivant, sans suivre la route) ;
+    Les trains sont collés aux voies, en passant par chaque gare desservie ; un car passe par la suite de ses arrêts (droit d'un arrêt au suivant, sans suivre la route) ;
     une correspondance à pied est un trait droit en petits points.
     `depart`, `arrivee` : (lon, lat) des gares, utilisées sans train pour tracer la liaison directe."""
     etapes = []
@@ -275,8 +275,8 @@ def tracer_trajet(trajet, reseau, depart, arrivee):
             style = style_ligne(s)
             if style["cle"] == "bus":            # un car ne roule pas sur les rails : on passe par chacun de ses arrêts
                 points, ok = [tuple(a) for a in (s.get("arrets_lonlat") or [de, vers])], False
-            else:
-                points, ok = chemin(reseau, de, vers)
+            else:                                # un train passe par chacune de ses gares : sinon le plus court chemin peut prendre d'autres lignes
+                points, ok = chemin_par_arrets(reseau, [de, *(s.get("arrets_lonlat") or [])[1:-1], vers])
             etapes.append({**_horaires(s), "points": [[lat, lon] for lon, lat in points], "sur_voie": ok, "style": style, "marche": False,
                            "libelle": f"{s.get('ligne') or 'Train'} {s.get('numero') or ''}".strip()})
         elif s["type"] in ("transfer", "street_network", "crow_fly") and s.get("mode") == "walking" and s["duree_s"] >= 60 and de != vers:
@@ -316,32 +316,6 @@ def retour_minimum(quand, maintenant=None):
 def options_heures(jour, minimum):
     """Options du menu d'heures (« 08:00 »…) : celles qui précèdent `minimum` (datetime) sont grisées pour ce `jour` (date ; None = rien de grisé)."""
     return [{"label": f"{h:02d}:00", "value": f"{h:02d}:00", "disabled": bool(jour and minimum and datetime.combine(jour, time(h)) < minimum)} for h in HEURES]
-
-
-def periode_evenement(engine, lieu_id, aujourdhui=None):
-    """(début, fin) de la prochaine période de l'événement qui a lieu à ce lieu (en cours ou à venir), None si ce n'est pas un événement ou s'il est passé."""
-    if not lieu_id or _est_ville(lieu_id):
-        return None
-    ligne = pd.read_sql(sa.text(
-        "SELECT p.date_debut, p.date_fin FROM evenement_periode p JOIN evenement_lieu l ON l.evenement_id = p.evenement_id "
-        "JOIN lieu ON lieu.id = l.lieu_id WHERE l.lieu_id = :id AND lieu.type = 'evenement' AND p.date_fin >= :jour ORDER BY p.date_debut LIMIT 1"),
-        engine, params={"id": int(lieu_id), "jour": str((aujourdhui or date.today()).isoformat())})
-    if ligne.empty:
-        return None
-    return date.fromisoformat(str(ligne.iloc[0]["date_debut"])[:10]), date.fromisoformat(str(ligne.iloc[0]["date_fin"])[:10])
-
-
-def bornes_dates(periode, aujourdhui=None):
-    """(premier jour, dernier jour, dans_la_fenêtre) du calendrier de l'aller : de aujourd'hui à 30 jours, réduit à la période de l'événement.
-    Si l'événement commence après la fenêtre de l'API, le calendrier reste complet et dans_la_fenêtre est faux."""
-    jour = aujourdhui or date.today()
-    mini, maxi = jour, jour + timedelta(days=FENETRE_API_JOURS)
-    if periode:
-        debut, fin = max(mini, periode[0]), min(maxi, periode[1])
-        if debut <= fin:
-            return debut, fin, True
-        return mini, maxi, False
-    return mini, maxi, True
 
 
 def rechercher(depart_id, destination_id, quand=None, retour=None, engine=None):

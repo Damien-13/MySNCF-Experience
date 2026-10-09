@@ -111,3 +111,22 @@ def chemin(reseau, depart, arrivee):
     dist, pred = dijkstra(graphe, indices=source, limit=ligne_droite * RAPPORT_MAX + MARGE_RECHERCHE_KM, return_predecessors=True)
     trouve = suivre(points, dist, pred, source, fin, depart, arrivee, ligne_droite)
     return (trouve, True) if trouve else (droite, False)
+
+
+def chemin_par_arrets(reseau, arrets):
+    """Chemin sur les voies qui passe par chaque arrêt desservi [(lon, lat), …], dans l'ordre : (points [[lon, lat], …], sur_voie).
+    Le plus court chemin entre les seules extrémités peut prendre d'autres lignes que le train (un TGV Marseille → Rennes coupé par les petites
+    lignes du centre de la France au lieu de passer par Massy) : on le calcule d'un arrêt au suivant. Si une portion n'a pas de chemin fiable,
+    on garde le chemin entre les extrémités, ou à défaut celui d'arrêt en arrêt avec ses portions en ligne droite."""
+    arrets = [tuple(a) for i, a in enumerate(arrets) if i == 0 or tuple(a) != tuple(arrets[i - 1])]
+    if len(arrets) <= 2:
+        return chemin(reseau, arrets[0], arrets[-1])
+    points, sur_voie = [], True
+    for de, vers in zip(arrets, arrets[1:]):
+        morceau, ok = chemin(reseau, de, vers)
+        sur_voie = sur_voie and ok
+        points += morceau if not points else morceau[1:]
+    if sur_voie:
+        return points, True
+    direct = chemin(reseau, arrets[0], arrets[-1])
+    return direct if direct[1] else (points, False)

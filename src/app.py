@@ -78,7 +78,7 @@ from datetime import datetime, timedelta
 from lib.db.connection import get_engine
 from flask import Response, abort
 from lib import circulations, sprites, suivi
-from lib.itineraire import FENETRE_API_JOURS, bornes_dates, options_heures, periode_evenement, retour_minimum, RAYON_POI_KM, chercher_destinations, etiquettes_trajets, options_gares, quand_depuis, rechercher, style_dernier_km, tracer_trajet
+from lib.itineraire import FENETRE_API_JOURS, options_heures, retour_minimum, RAYON_POI_KM, chercher_destinations, etiquettes_trajets, options_gares, quand_depuis, rechercher, style_dernier_km, tracer_trajet
 from lib.reseau_ferre import charger_reseau
 
 # ==============================================================================
@@ -489,18 +489,16 @@ def mise_en_page():
                                     "padding": "20px", "borderRadius": "15px", "boxShadow": "0px 4px 15px rgba(0,0,0,0.2)",
                                     "width": "340px", **transition_style
                                 }, children=[
-                                    html.H5(html.I(className="fa-solid fa-route me-2"), className="mb-3", style={"color": CARMILLON}),
+                                    html.H5(html.I(className="fa-solid fa-route me-2"), className="mb-2", style={"color": CARMILLON}),
                                             
                                     html.Label("Départ :", className="fw-bold mb-1", style={"fontSize": "0.9rem"}),
-                                    dcc.Dropdown(id="input-depart", options=gares_opts, placeholder="Gare de départ...", searchable=True, className="mb-3"),
+                                    dcc.Dropdown(id="input-depart", options=gares_opts, placeholder="Gare de départ...", searchable=True, className="mb-2"),
                                             
                                     html.Label("Destination :", className="fw-bold mb-1", style={"fontSize": "0.9rem"}),
-                                    dcc.Dropdown(id="input-arrivee", placeholder="Rechercher un lieu...", searchable=True, search_order="original", className="mb-3"),   # garde l'ordre du serveur : ville, ses événements, le reste
+                                    dcc.Dropdown(id="input-arrivee", placeholder="Rechercher un lieu...", searchable=True, search_order="original", className="mb-2"),   # garde l'ordre du serveur : ville, ses événements, le reste
                                             
-                                    html.Div(id="info-periode", className="mb-2", style={"fontSize": "0.8rem", "opacity": 0.8}),
-
                                     html.Label("Aller :", className="fw-bold mb-1", style={"fontSize": "0.9rem"}),
-                                    dbc.Row(className="g-2 mb-3", children=[
+                                    dbc.Row(className="g-2 mb-2", children=[
                                         dbc.Col(dcc.DatePickerSingle(id="date-picker-aller", date=date.today(), min_date_allowed=date.today(), max_date_allowed=date.today() + timedelta(days=FENETRE_API_JOURS), display_format="DD/MM/YYYY"), width=7),
                                         dbc.Col(dcc.Dropdown(id="time-picker-aller", options=hours_opts, placeholder="Heure"), width=5),
                                     ]),
@@ -509,15 +507,15 @@ def mise_en_page():
                                             
                                     html.Div(id="row-retour", style={"display": "none"}, children=[
                                         html.Label("Retour :", className="fw-bold mb-1", style={"fontSize": "0.9rem"}),
-                                        dbc.Row(className="g-2 mb-3", children=[
+                                        dbc.Row(className="g-2 mb-2", children=[
                                             dbc.Col(dcc.DatePickerSingle(id="date-picker-retour", min_date_allowed=date.today(), max_date_allowed=date.today() + timedelta(days=FENETRE_API_JOURS), display_format="DD/MM/YYYY", placeholder="Date retour"), width=7),
                                             dbc.Col(dcc.Dropdown(id="time-picker-retour", options=hours_opts, placeholder="Heure"), width=5),
                                         ])
                                     ]),
                                             
-                                    html.Hr(className="my-3", style={"opacity": "0.1"}),
+                                    html.Hr(className="my-2", style={"opacity": "0.1"}),
                                             
-                                    html.Label("Catégorie :", className="fw-bold mb-2", style={"fontSize": "0.9rem"}),
+                                    html.Label("Catégorie :", className="fw-bold mb-1", style={"fontSize": "0.9rem"}),
                                     dbc.RadioItems(
                                         id="filter-categorie",
                                         options=[
@@ -526,7 +524,7 @@ def mise_en_page():
                                             {"label": html.Span([html.I(className="fa-solid fa-camera me-2"), "Tourisme"]), "value": "tourisme"},
                                             {"label": html.Span([html.I(className="fa-solid fa-masks-theater me-2"), "Festivals"]), "value": "evenement"}
                                         ],
-                                        value="tous", className="fw-bold mb-4", style={"fontSize": "0.85rem"}
+                                        value="tous", inline=True, className="fw-bold mb-3", style={"fontSize": "0.85rem"}
                                     ),
                                             
                                     dbc.Button([html.I(className="fa-solid fa-magnifying-glass me-2"), "Rechercher"], id="btn-search", style={"backgroundColor": CARMILLON, "border": "none", "width": "100%", "fontWeight": "bold", "padding": "10px"}),
@@ -834,27 +832,6 @@ def _quand_aller(jour, heure):
 
 
 @app.callback(
-    [Output("date-picker-aller", "date"), Output("date-picker-aller", "min_date_allowed"), Output("date-picker-aller", "max_date_allowed"), Output("info-periode", "children")],
-    Input("input-arrivee", "value"),
-    State("date-picker-aller", "date")
-)
-def calendrier_selon_evenement(lieu, jour):
-    """Un événement n'a lieu que sur sa période : le calendrier de l'aller s'y limite (pas de train bien avant), et la date est ramenée dans la période."""
-    try:
-        periode = periode_evenement(engine, lieu)
-    except Exception:
-        periode = None
-    mini, maxi, dans_fenetre = bornes_dates(periode)
-    choisi = min(max(_jour(jour) or mini, mini), maxi)
-    info = ""
-    if periode and not dans_fenetre:
-        info = f"Événement du {periode[0]:%d/%m} au {periode[1]:%d/%m} : hors des {FENETRE_API_JOURS} jours couverts par l'API SNCF."
-    elif periode and (periode[1] - periode[0]).days < 300:
-        info = f"Événement du {periode[0]:%d/%m} au {periode[1]:%d/%m}" if periode[0] != periode[1] else f"Événement le {periode[0]:%d/%m}"
-    return choisi.isoformat(), mini.isoformat(), maxi.isoformat(), info
-
-
-@app.callback(
     [Output("time-picker-aller", "options"), Output("time-picker-aller", "value")],
     Input("date-picker-aller", "date"),
     State("time-picker-aller", "value")
@@ -871,7 +848,7 @@ def heures_aller(jour, heure):
     State("date-picker-retour", "date")
 )
 def calendrier_retour(jour, heure, maxi, retour):
-    """Le retour ne peut pas précéder l'aller (ni dépasser la fin de la période de l'événement)."""
+    """Le retour ne peut pas précéder l'aller (ni dépasser la fenêtre de l'API SNCF)."""
     aller = _quand_aller(_jour(jour), heure)
     mini = retour_minimum(aller).date() if aller else date.today()
     maxi = _jour(maxi) or date.today() + timedelta(days=FENETRE_API_JOURS)
@@ -893,14 +870,18 @@ def heures_retour(retour, jour, heure, heure_retour):
     return options, (None if any(o["disabled"] and o["value"] == heure_retour for o in options) else heure_retour)
 
 
+# Caractères des icônes Font Awesome (city, landmark, camera, masks-theater, location-dot), affichés par src/assets/menus.css
+PICTOS_DESTINATION = {"ville": "\uf64f", "culture": "\uf66f", "tourisme": "\uf030", "evenement": "\uf630"}
+PICTO_LIEU = "\uf3c5"
+
+
 def _option_destination(o, recherche=""):
-    """Option du menu de destination avec le pictogramme de son type : ville, événement, culture ou tourisme.
+    """Option du menu de destination, précédée de l'icône de son type : ville, événement, culture ou tourisme.
+    Libellé en texte seul : un composant (icône) dans le libellé fait planter le rendu de Dash quand les options changent pendant la saisie
+    (« Cannot read properties of undefined (reading 'props') », puis la page se recharge).
     Le menu (Dash 4) refiltre les options dans le navigateur sur le texte « search » : il cacherait la ville de Huez pour « Alpe d'Huez ».
     Toutes les options reçoivent donc la saisie comme texte de recherche (le tri, lui, est gardé par search_order="original")."""
-    icone = "fa-city" if o["type"] == "ville" else POI_ICONES.get(o["type"], "fa-location-dot")
-    couleur = "#555555" if o["type"] == "ville" else POI_COULEURS.get(o["type"], "#555555")
-    return {"label": html.Span([html.I(className=f"fa-solid {icone} me-2", style={"color": couleur, "width": "1.1em", "textAlign": "center"}), o["label"]]),
-            "value": o["value"], "search": recherche or o["label"]}
+    return {"label": f"{PICTOS_DESTINATION.get(o['type'], PICTO_LIEU)}  {o['label']}", "value": o["value"], "search": recherche or o["label"]}
 
 
 @app.callback(
