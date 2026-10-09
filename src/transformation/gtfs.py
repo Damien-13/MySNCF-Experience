@@ -247,6 +247,7 @@ def charger(frames, reseau, source, engine=None, rayon_gare_m=None, type_lieu="a
             libres = arrets[arrets["lieu_id"].isna() & arrets["lat"].notna() & arrets["lon"].notna()]
             noms = pd.DataFrame(conn.execute(sa.select(Lieu.id, Lieu.nom, Lieu.lat, Lieu.lon).where(Lieu.type == "gare")).all(),
                                 columns=["id", "nom", "lat", "lon"]).dropna(subset=["lat", "lon"])
+            arrets["lieu_id"] = arrets["lieu_id"].astype(object)     # colonne de décimaux (NaN) : pandas 2.3+ refuse d'y écrire des identifiants
             arrets.loc[libres.index, "lieu_id"] = pd.Series(rattacher_par_position(libres, noms, rayon_gare_m), index=libres.index, dtype=object)
         nouveaux = arrets[arrets["lieu_id"].isna() & arrets["lat"].notna() & arrets["lon"].notna()].copy()
         nouveaux["type"] = nouveaux["libelle"].fillna("").str.startswith("Car").map({True: "arret_bus", False: type_lieu})

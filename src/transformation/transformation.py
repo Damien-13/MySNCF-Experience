@@ -16,9 +16,11 @@ import evenement
 import gare
 import sncf
 import tourisme
+import trace_trajets
 import trains_europeens
 import transilien
 import velo
+import voies
 
 ETAPES = [
     ("gares", gare),
@@ -30,6 +32,8 @@ ETAPES = [
     ("evenements", evenement),
     ("velo", velo),
     ("bus", bus),
+    ("tracé ferroviaire", voies),
+    ("tracé des trajets", trace_trajets),
 ]
 
 
