@@ -32,7 +32,7 @@ def get_logo_base64():
 LOGO_SRC = get_logo_base64()
 
 import dash
-from dash import ALL, ctx, dcc, html, Input, Output, State
+from dash import ALL, ClientsideFunction, ctx, dcc, html, Input, Output, State
 from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 import dash_leaflet as dl
@@ -43,12 +43,13 @@ import pandas as pd
 import numpy as np
 import json
 import re
+import threading
 import time
 from datetime import date, datetime
 
 from lib.db.connection import get_engine
 from flask import Response, abort
-from lib import sprites, suivi
+from lib import circulations, sprites, suivi
 from lib.itineraire import RAYON_POI_KM, chercher_destinations, options_gares, quand_depuis, rechercher, style_dernier_km, tracer_trajet
 from lib.reseau_ferre import charger_reseau
 
@@ -96,6 +97,9 @@ def get_reseau_ferre():
         return None
 
 reseau_ferre = get_reseau_ferre()
+
+# Les horaires de tous les trains se chargent en arrière-plan (une dizaine de secondes) pour que le bouton « Tous les trains en direct » réponde vite.
+threading.Thread(target=lambda: circulations.charger(engine), daemon=True).start()
 
 # Animation de chargement
 custom_spinner = html.Div([
@@ -176,12 +180,18 @@ app.layout = dbc.Container(id="main-container", style={"backgroundColor": init_c
     dcc.Store(id="store-selection", data={"sens": "aller", "index": 0}),
     dcc.Store(id="store-etapes"),
     dcc.Store(id="store-horloge", data={"mode": "reel"}),
+    dcc.Store(id="store-js"),
+    dcc.Store(id="store-tous", data={"actif": False, "trains": []}),
+    dcc.Store(id="store-js-tous"),
+    dcc.Interval(id="tick-tous", interval=120_000),
     dcc.Interval(id="tick", interval=1000),
     
     # BANDEAU TOP BAR ÉPURÉ (Juste Logo et Thème)
     dbc.Row(id="top-bar", style={"backgroundColor": init_colors["card_bg"], "borderRadius": "8px", **transition_style}, className="p-3 mb-4 shadow-sm align-items-center", children=[
-        dbc.Col(html.Img(id="logo-img", src=LOGO_SRC, style={"maxHeight": "70px", "objectFit": "contain", "borderRadius": "8px", "padding": "5px"}), width=6, className="text-start"),
-        dbc.Col(dbc.Checklist(options=[{"label": "☀️ Clair / 🌙 Sombre", "value": "dark"}], value=[], id="theme-switch", switch=True, className="fw-bold d-flex justify-content-end"), width=6),
+        dbc.Col(html.Img(id="logo-img", src=LOGO_SRC, style={"maxHeight": "70px", "objectFit": "contain", "borderRadius": "8px", "padding": "5px"}), width=4, className="text-start"),
+        dbc.Col(dbc.Button([html.I(className="fa-solid fa-train-subway me-2"), html.Span("Tous les trains en direct", id="btn-tous-texte")], id="btn-tous", color="secondary", outline=True, active=False),
+                width=4, className="text-center"),
+        dbc.Col(dbc.Checklist(options=[{"label": "☀️ Clair / 🌙 Sombre", "value": "dark"}], value=[], id="theme-switch", switch=True, className="fw-bold d-flex justify-content-end"), width=4),
     ]),
 
     # ONGLETS
@@ -258,7 +268,7 @@ app.layout = dbc.Container(id="main-container", style={"backgroundColor": init_c
 
                                     dl.Map(id="map", center=[46.2, 3.5], zoom=5, style={"width": "100%", "height": "650px", "display": "block", "margin": "0"}, children=[
                                         dl.TileLayer(id="map-tiles", url=init_colors["tiles"]),
-                                        dl.LayerGroup(id="map-lines"), dl.LayerGroup(id="map-isochrones"), dl.LayerGroup(id="map-markers"), dl.LayerGroup(id="map-trains")
+                                        dl.LayerGroup(id="map-lines"), dl.LayerGroup(id="map-isochrones"), dl.LayerGroup(id="map-markers")
                                     ])
                                 ])
                             ])
@@ -602,6 +612,8 @@ def afficher_resultat(r, selection, categorie):
     if nouveau:
         points = [p for t in traces for p in t["points"]] + [[r["destination"]["lat"], r["destination"]["lon"]]]
         viewport = dict(bounds=[[min(p[0] for p in points), min(p[1] for p in points)], [max(p[0] for p in points), max(p[1] for p in points)]], transition="flyTo")
+    for t in traces:                                    # ce dont le navigateur a besoin pour dessiner le train (image, taille réelle)
+        t.update(sprites.infos(t["style"]["cle"], t["libelle"]))
     return blocs, titre, _legende_poi(categorie), visible if r["trajets_retour"] else cache, detail_statut, lignes, cercle, reperes, viewport, traces
 
 @app.callback(
@@ -616,36 +628,15 @@ def choisir_horloge(clics_reel, clics_sim):
     return {"mode": "reel"}
 
 
-LONGUEUR_TRAIN_PX = 120        # taille de l'image d'un train sur la carte, la même à tous les zooms
-ETIREMENT_TRAIN = 2.2          # les trains vus du dessus sont très fins : on les élargit pour qu'on les reconnaisse (1 = proportions réelles)
-
-
-def _repere_train(t):
-    """Repère d'un train sur la carte : son image vue du dessus, tournée dans le sens de la voie ; une pastille pour un car (pas d'image de train)."""
-    cle = sprites.cle_sprite(t["style"]["cle"], t["libelle"])
-    retard = f" · retard {t['retard_min']} min" if t["retard_min"] else ""
-    infobulle = dl.Tooltip(f"{t['libelle']} · {round(t['avancement'] * 100)} % du parcours{retard}")
-    if cle is None:
-        pastille = {**_pastille("x", 30), "background": t["style"]["couleur"]}
-        return dl.DivMarker(position=[t["lat"], t["lon"]], zIndexOffset=1000, children=[infobulle], iconOptions=dict(
-            className="train-sprite", iconSize=[30, 30], iconAnchor=[15, 15], html=f'<div style="{_css(pastille)}"><i class="fa-solid fa-bus"></i></div>'))
-    longueur = LONGUEUR_TRAIN_PX
-    hauteur = max(round(longueur / sprites.largeur_sur_hauteur(cle) * ETIREMENT_TRAIN), 12)
-    image = (f'<img src="/sprite-train/{cle}.png" style="width:{longueur}px;height:{hauteur}px;transform:rotate({t["cap"] - 90:.0f}deg);'
-             f'filter:drop-shadow(0 0 3px rgba(0,0,0,0.7))">')
-    return dl.DivMarker(position=[t["lat"], t["lon"]], zIndexOffset=1000, children=[infobulle], iconOptions=dict(
-        className="train-sprite", iconSize=[longueur, hauteur], iconAnchor=[longueur // 2, hauteur // 2], html=image))
-
-
 @app.callback(
-    [Output("map-trains", "children"), Output("suivi-etat", "children"), Output("btn-reel", "active"), Output("btn-sim", "active")],
+    [Output("suivi-etat", "children"), Output("btn-reel", "active"), Output("btn-sim", "active")],
     [Input("tick", "n_intervals"), Input("store-etapes", "data"), Input("store-horloge", "data")]
 )
-def animer_trains(_, etapes, horloge):
-    """Place les trains du trajet choisi à l'heure courante (ordinateur) ou à l'heure simulée, chaque seconde."""
+def etat_du_suivi(_, etapes, horloge):
+    """Texte d'état (où en est le train) chaque seconde ; les trains eux-mêmes sont animés dans le navigateur (src/assets/trains.js)."""
     simulation = bool(horloge) and horloge.get("mode") == "sim"
     if not etapes:
-        return [], "", not simulation, simulation
+        return "", not simulation, simulation
     maintenant = datetime.now()
     if simulation:
         departs = [datetime.fromisoformat(e["depart"]) for e in etapes if e.get("depart") and not e["marche"]]
@@ -653,7 +644,45 @@ def animer_trains(_, etapes, horloge):
             maintenant = suivi.horloge_simulee(min(departs), datetime.fromtimestamp(horloge["t0_reel"]), maintenant)
     etat = suivi.suivre(etapes, maintenant)
     entete = f"Simulation · {maintenant:%d/%m %H:%M} — " if simulation else f"Temps réel · {maintenant:%H:%M} — "
-    return [_repere_train(t) for t in etat["trains"]], entete + etat["message"], not simulation, simulation
+    return entete + etat["message"], not simulation, simulation
+
+
+@app.callback(
+    [Output("store-tous", "data"), Output("btn-tous", "active"), Output("btn-tous-texte", "children")],
+    [Input("btn-tous", "n_clicks"), Input("tick-tous", "n_intervals")],
+    State("store-tous", "data"),
+    running=[(Output("btn-tous", "disabled"), True, False)],
+    prevent_initial_call=True
+)
+def trains_du_reseau(clics, _, actuel):
+    """Bouton du bandeau : affiche (ou cache) tous les trains qui roulent sur le réseau, d'après les horaires théoriques. Rafraîchi toutes les 2 minutes."""
+    actif = bool(actuel and actuel.get("actif"))
+    if ctx.triggered_id == "btn-tous":
+        actif = not actif
+    elif not actif:
+        raise PreventUpdate                       # le rafraîchissement ne fait rien tant que le bouton est éteint
+    if not actif:
+        return {"actif": False, "trains": []}, False, "Tous les trains en direct"
+    try:
+        trains = circulations.en_cours(datetime.now(), engine)
+    except Exception:
+        return {"actif": False, "trains": []}, False, "Tous les trains en direct (indisponible)"
+    return {"actif": True, "trains": trains}, True, f"{len(trains)} trains en circulation"
+
+
+# Animation des trains dans le navigateur (src/assets/trains.js) : fluide, à l'échelle de la carte, clic pour suivre un train.
+app.clientside_callback(
+    ClientsideFunction(namespace="trains", function_name="configurer"),
+    Output("store-js", "data"),
+    [Input("store-etapes", "data"), Input("store-horloge", "data")]
+)
+
+
+app.clientside_callback(
+    ClientsideFunction(namespace="trains", function_name="configurerTous"),
+    Output("store-js-tous", "data"),
+    Input("store-tous", "data")
+)
 
 
 @app.server.route("/sprite-train/<cle>.png")

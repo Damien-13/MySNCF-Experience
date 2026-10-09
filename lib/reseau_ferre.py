@@ -20,6 +20,7 @@ from lib.db.connection import get_engine
 from lib.db.models import TronconVoie
 
 DECIMALES = 5
+TYPES_HORS_RAIL = ("Car TER", "Car à réservation", "Car de remplacement", "Navette")      # lignes des réseaux de train qui roulent sur la route
 RAYON_JONCTION_KM = 0.5
 RAYON_ACCROCHAGE_KM = 1.0
 RAPPORT_MAX = 3.0

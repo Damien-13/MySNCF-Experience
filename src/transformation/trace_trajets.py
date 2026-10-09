@@ -27,10 +27,9 @@ from scipy.sparse.csgraph import dijkstra
 
 from lib.db.connection import get_engine
 from lib.db.models import TraceTrajet, TronconVoie
-from lib.reseau_ferre import (RAPPORT_MAX, RAYON_ACCROCHAGE_KM, RAYON_JONCTION_KM, MARGE_RECHERCHE_KM,  # noqa: F401 (réexportés)
+from lib.reseau_ferre import (TYPES_HORS_RAIL, RAPPORT_MAX, RAYON_ACCROCHAGE_KM, RAYON_JONCTION_KM, MARGE_RECHERCHE_KM,  # noqa: F401 (réexportés)
                               construire_reseau, en_km, geometrie, longueur_km, suivre)
 
-TYPES_HORS_RAIL = ("Car TER", "Car à réservation", "Car de remplacement", "Navette")
 CHUNK_SIZE = 5_000
 
 

@@ -1,0 +1,19 @@
+/* Trains animés sur la carte (voir trains.js). */
+.train-js { background: none; border: none; }
+.train-js .tj { position: relative; width: 0; height: 0; }
+.train-js .tj-img {
+  position: absolute; left: 0; top: 0; translate: -50% -50%; transform-origin: center;
+  display: none; max-width: none; filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.75)); pointer-events: auto;
+}
+.train-js .tj-pastille {
+  position: absolute; left: 0; top: 0; translate: -50% -50%; width: 20px; height: 20px; border-radius: 50%;
+  border: 2px solid #fff; color: #fff; display: flex; align-items: center; justify-content: center;
+  font-size: 10px; box-shadow: 0 1px 5px rgba(0, 0, 0, 0.55);
+}
+.popup-train .leaflet-popup-content { margin: 12px 14px; min-width: 210px; font-size: 13px; line-height: 1.45; }
+.infos-train .titre { font-weight: 700; font-size: 15px; margin-bottom: 2px; }
+.infos-train .puce { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin-right: 7px; vertical-align: middle; }
+.infos-train .service { opacity: 0.7; margin-bottom: 4px; }
+.infos-train .barre { height: 5px; border-radius: 3px; background: rgba(128, 128, 128, 0.3); margin: 7px 0 4px; overflow: hidden; }
+.infos-train .barre > div { height: 100%; border-radius: 3px; }
+.infos-train .astuce { opacity: 0.6; font-size: 11px; margin-top: 4px; }

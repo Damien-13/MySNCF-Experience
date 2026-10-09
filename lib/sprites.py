@@ -29,6 +29,9 @@ IMAGES = {
     "renfe": "Renfe AVE/Renfe AVE.png",
     "trenitalia": "Frecciarossa/Frecciarossa.png",
 }
+# Longueur réelle d'une rame en mètres : l'image du train est affichée à cette échelle sur la carte (elle grandit quand on zoome).
+LONGUEURS_M = {"inoui": 200, "ouigo": 200, "renfe": 200, "trenitalia": 200, "ter": 100, "rer": 110, "transilien": 100}
+LONGUEUR_PAR_DEFAUT_M = 100
 # Services sans image : on prend la plus proche (un Intercités ressemble à un TER, les autres trains à grande vitesse à un INOUI).
 REPLI = {"intercites": "ter", "eurostar": "inoui", "international": "inoui", "inconnu": "inoui"}
 
@@ -40,6 +43,12 @@ def cle_sprite(cle_style, libelle=""):
     if cle_style == "rer":
         return "rer" if "RER" in libelle.upper() else "transilien"
     return cle_style if cle_style in IMAGES else REPLI.get(cle_style, "inoui")
+
+
+def infos(cle_style, libelle=""):
+    """Ce dont le navigateur a besoin pour afficher un train : {"sprite": clé de l'image ou None, "longueur_m", "rapport" (largeur / hauteur de l'image)}."""
+    cle = cle_sprite(cle_style, libelle)
+    return {"sprite": cle, "longueur_m": LONGUEURS_M.get(cle, LONGUEUR_PAR_DEFAUT_M) if cle else 12, "rapport": largeur_sur_hauteur(cle) if cle else 1.0}
 
 
 def _normal(nom):

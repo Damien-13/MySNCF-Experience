@@ -178,14 +178,14 @@ def style_dernier_km(mode):
 
 
 def _horaires(s):
-    """Départ, arrivée (texte « AAAA-MM-JJ HH:MM:SS » : le dashboard les garde dans un dcc.Store) et retard en minutes d'une section."""
-    return {"depart": str(s["depart"]) if s.get("depart") else None, "arrivee": str(s["arrivee"]) if s.get("arrivee") else None,
-            "retard_min": s.get("retard_min") or 0}
+    """Gares, départ, arrivée (texte « AAAA-MM-JJ HH:MM:SS » : le dashboard les garde dans un dcc.Store) et retard en minutes d'une section."""
+    return {"de": s.get("de"), "vers": s.get("vers"), "depart": str(s["depart"]) if s.get("depart") else None,
+            "arrivee": str(s["arrivee"]) if s.get("arrivee") else None, "retard_min": s.get("retard_min") or 0}
 
 
 def tracer_trajet(trajet, reseau, depart, arrivee):
     """Un dict par étape du trajet, dans l'ordre : points [[lat, lon], …], sur_voie, style (style_ligne), libelle (« TER 880693 »), marche (vrai à pied),
-    depart, arrivee, retard_min (voir lib/suivi.py : ils servent à placer le train).
+    de, vers (noms des gares), depart, arrivee, retard_min (voir lib/suivi.py : ils servent à placer le train).
     Les trains sont collés aux voies ; un car passe par la suite de ses arrêts (droit d'un arrêt au suivant, sans suivre la route) ;
     une correspondance à pied est un trait droit en petits points.
     `depart`, `arrivee` : (lon, lat) des gares, utilisées sans train pour tracer la liaison directe."""
@@ -207,7 +207,7 @@ def tracer_trajet(trajet, reseau, depart, arrivee):
                            "libelle": f"À pied · {round(s['duree_s'] / 60)} min"})
     if not any(not e["marche"] for e in etapes):
         points, ok = chemin(reseau, depart, arrivee)
-        etapes.insert(0, {"depart": None, "arrivee": None, "retard_min": 0, "points": [[lat, lon] for lon, lat in points], "sur_voie": ok,
+        etapes.insert(0, {"de": None, "vers": None, "depart": None, "arrivee": None, "retard_min": 0, "points": [[lat, lon] for lon, lat in points], "sur_voie": ok,
                           "style": style_ligne({}), "marche": False, "libelle": "Liaison directe"})
     return etapes
 
