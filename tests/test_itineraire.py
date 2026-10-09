@@ -16,7 +16,7 @@ import migration
 from lib import itineraire, navitia
 from lib.db.connection import get_engine
 from lib.db.models import Gare, Lieu
-from lib.reseau_ferre import chemin, construire_reseau
+from lib.reseau_ferre import chemin, chemin_par_arrets, construire_reseau
 
 # Deux gares sur une même voie droite ; un château à 1 km de la seconde ; un festival plus loin ; des stations et un arrêt de bus près de la seconde.
 GARE_A = dict(id=1, type="gare", nom="Gare A", lat=48.0, lon=2.0)
@@ -86,6 +86,15 @@ def test_chemin_suit_la_voie_ou_se_replie_en_ligne_droite():
     assert sur_voie and [2.1, 48.0] in points
     assert chemin(reseau, (2.0, 48.0001), (9.0, 40.0)) == ([[2.0, 48.0001], [9.0, 40.0]], False)             # gare à des centaines de km des voies
     assert chemin(None, (2.0, 48.0), (2.2, 48.0)) == ([[2.0, 48.0], [2.2, 48.0]], False)                     # sans réseau en base
+
+
+def test_chemin_par_arrets_passe_par_chaque_gare_desservie():
+    # Deux voies de A (2.0, 48.0) à C (2.2, 48.0) : la droite, plus courte, et un détour par la gare B (2.1, 48.1).
+    reseau = construire_reseau([[[2.0, 48.0], [2.1, 48.0], [2.2, 48.0]], [[2.0, 48.0], [2.1, 48.1], [2.2, 48.0]]])
+    points, sur_voie = chemin_par_arrets(reseau, [(2.0, 48.0), (2.1, 48.1), (2.2, 48.0)])
+    assert sur_voie and [2.1, 48.1] in points and [2.1, 48.0] not in points                 # le train dessert B : il prend le détour
+    assert [2.1, 48.1] not in chemin(reseau, (2.0, 48.0), (2.2, 48.0))[0]                     # sans les arrêts, le plus court chemin l'évite
+    assert chemin_par_arrets(reseau, [(2.0, 48.0), (2.0, 48.0), (2.2, 48.0)]) == chemin(reseau, (2.0, 48.0), (2.2, 48.0))   # arrêt répété : ignoré
 
 
 def test_style_ligne_donne_une_couleur_et_un_motif_par_service():
