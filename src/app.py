@@ -43,9 +43,12 @@ import pandas as pd
 import numpy as np
 import json
 import re
+import time
 from datetime import date, datetime
 
 from lib.db.connection import get_engine
+from flask import Response, abort
+from lib import sprites, suivi
 from lib.itineraire import RAYON_POI_KM, chercher_destinations, options_gares, quand_depuis, rechercher, style_dernier_km, tracer_trajet
 from lib.reseau_ferre import charger_reseau
 
@@ -171,6 +174,9 @@ app.layout = dbc.Container(id="main-container", style={"backgroundColor": init_c
     dcc.Download(id="download-export"),
     dcc.Store(id="store-resultat"),
     dcc.Store(id="store-selection", data={"sens": "aller", "index": 0}),
+    dcc.Store(id="store-etapes"),
+    dcc.Store(id="store-horloge", data={"mode": "reel"}),
+    dcc.Interval(id="tick", interval=1000),
     
     # BANDEAU TOP BAR ÉPURÉ (Juste Logo et Thème)
     dbc.Row(id="top-bar", style={"backgroundColor": init_colors["card_bg"], "borderRadius": "8px", **transition_style}, className="p-3 mb-4 shadow-sm align-items-center", children=[
@@ -252,7 +258,7 @@ app.layout = dbc.Container(id="main-container", style={"backgroundColor": init_c
 
                                     dl.Map(id="map", center=[46.2, 3.5], zoom=5, style={"width": "100%", "height": "650px", "display": "block", "margin": "0"}, children=[
                                         dl.TileLayer(id="map-tiles", url=init_colors["tiles"]),
-                                        dl.LayerGroup(id="map-lines"), dl.LayerGroup(id="map-isochrones"), dl.LayerGroup(id="map-markers")
+                                        dl.LayerGroup(id="map-lines"), dl.LayerGroup(id="map-isochrones"), dl.LayerGroup(id="map-markers"), dl.LayerGroup(id="map-trains")
                                     ])
                                 ])
                             ])
@@ -269,6 +275,11 @@ app.layout = dbc.Container(id="main-container", style={"backgroundColor": init_c
                                                    className="btn-group", inputClassName="btn-check", labelClassName="btn btn-outline-secondary", labelCheckedClassName="active"),
                                     id="col-sens", xs=12, lg=3, style={"display": "none"}),
                             dbc.Col(html.Div(id="poi-legend"), xs=12, lg=4, className="text-lg-end"),
+                        ]),
+                        dbc.Row(className="align-items-center g-3 mb-3", children=[
+                            dbc.Col(dbc.ButtonGroup([dbc.Button([html.I(className="fa-solid fa-satellite-dish me-2"), "Temps réel"], id="btn-reel", color="secondary", outline=True, size="sm", active=True),
+                                                     dbc.Button([html.I(className="fa-solid fa-play me-2"), "Simuler le trajet"], id="btn-sim", color="secondary", outline=True, size="sm")]), xs=12, lg=4),
+                            dbc.Col(html.Div(id="suivi-etat", style={"fontSize": "0.9rem", "opacity": 0.85}), xs=12, lg=8),
                         ]),
                         dcc.Loading(type="circle", color=CARMILLON, children=html.Div(id="options-trajets", children=html.Div("Choisissez une gare de départ et une destination, puis lancez la recherche.", className="text-muted"))),
                     ])]), width=12)
@@ -439,11 +450,13 @@ def _carte_option(i, trajet, actif, traces):
     lignes = [html.Div(className="mb-1", children=[_echantillon(t["style"]["couleur"], t["style"]["tirets"]), html.Span(t["libelle"], className="fw-bold" if not t["marche"] else ""),
                                                    html.Span("" if t["marche"] else f" · {t['style']['libelle']}", style={"opacity": 0.7})]) for t in traces]
     co2 = trajet.get("co2_g")
+    retard = max([sec.get("retard_min") or 0 for sec in trajet["sections"] if sec["type"] == "public_transport"] or [0])
     return dbc.Col(xs=12, lg=4, className="mb-3", children=html.Div(id={"type": "option", "index": i}, n_clicks=0, role="button", tabIndex=0, children=[
         html.Div([html.Span(f"Option {i + 1}", className="badge me-2", style={"backgroundColor": CARMILLON if actif else "#6c757d"}),
                   html.Span(f"{_heure(trajet['depart'])} → {_heure(trajet['arrivee'])}", className="fs-4 fw-bold")]),
         html.Div(f"{_duree(trajet['duree_s'])} · " + (f"{trajet['correspondances']} correspondance(s)" if trajet["correspondances"] else "direct")
                  + (f" · {co2 / 1000:.1f} kg CO₂e" if co2 else ""), className="mb-2", style={"opacity": 0.8}),
+        *([html.Div(f"Retard annoncé : {retard} min", className="mb-2 fw-bold", style={"color": "#c0392b"})] if retard else []),
         *lignes,
     ], style={"cursor": "pointer", "padding": "14px", "borderRadius": "12px", "height": "100%",
               "border": f"3px solid {CARMILLON}" if actif else "1px solid rgba(128,128,128,0.35)",
@@ -496,7 +509,7 @@ def _message(texte, niveau="muted"):
 @app.callback(
     [Output("kpi-distance", "children"), Output("kpi-intermodal", "children"), Output("kpi-statut", "children"),
      Output("kpi-distance-detail", "children"), Output("kpi-intermodal-detail", "children"),
-     Output("store-resultat", "data"), Output("store-selection", "data"), Output("sens", "value")],
+     Output("store-resultat", "data"), Output("store-selection", "data"), Output("sens", "value"), Output("store-horloge", "data")],
     Input("btn-search", "n_clicks"),
     [State("input-depart", "value"), State("input-arrivee", "value"),
      State("date-picker-aller", "date"), State("time-picker-aller", "value"),
@@ -507,7 +520,7 @@ def _message(texte, niveau="muted"):
 def lancer_recherche(n_clicks, depart, arrivee, date_aller, heure_aller, aller_retour, date_retour, heure_retour):
     """Interroge la base et l'API SNCF, puis range le résultat dans store-resultat : l'affichage (trajets, carte) s'en sert sans rappeler l'API."""
     vide = ("-- km", "--", "--", "", "")
-    reset = ({"sens": "aller", "index": 0}, "aller")
+    reset = ({"sens": "aller", "index": 0}, "aller", {"mode": "reel"})
     if not depart or not arrivee:
         return (*vide, {"message": "Choisissez une gare de départ et une destination.", "niveau": "muted"}, *reset)
     try:
@@ -528,7 +541,7 @@ def lancer_recherche(n_clicks, depart, arrivee, date_aller, heure_aller, aller_r
 
 
 @app.callback(
-    Output("store-selection", "data", allow_duplicate=True),
+    [Output("store-selection", "data", allow_duplicate=True), Output("store-horloge", "data", allow_duplicate=True)],
     [Input({"type": "option", "index": ALL}, "n_clicks"), Input("sens", "value")],
     State("store-selection", "data"),
     prevent_initial_call=True
@@ -539,16 +552,17 @@ def choisir_option(clics, sens, selection):
     if declencheur == "sens":
         if sens == selection["sens"]:
             raise PreventUpdate
-        return {"sens": sens, "index": 0}
+        return {"sens": sens, "index": 0}, {"mode": "reel"}
     if isinstance(declencheur, dict) and ctx.triggered[0]["value"]:        # n_clicks vide = bloc qui vient d'apparaître, pas un clic
-        return {"sens": selection["sens"], "index": declencheur["index"]}
+        return {"sens": selection["sens"], "index": declencheur["index"]}, {"mode": "reel"}
     raise PreventUpdate
 
 
 @app.callback(
     [Output("options-trajets", "children"), Output("results-title", "children"), Output("poi-legend", "children"), Output("col-sens", "style"),
      Output("kpi-statut-detail", "children"),
-     Output("map-lines", "children"), Output("map-isochrones", "children"), Output("map-markers", "children"), Output("map", "viewport")],
+     Output("map-lines", "children"), Output("map-isochrones", "children"), Output("map-markers", "children"), Output("map", "viewport"),
+     Output("store-etapes", "data")],
     [Input("store-resultat", "data"), Input("store-selection", "data"), Input("filter-categorie", "value")]
 )
 def afficher_resultat(r, selection, categorie):
@@ -558,7 +572,7 @@ def afficher_resultat(r, selection, categorie):
     nouveau = "store-resultat.data" in ctx.triggered_prop_ids
     cache, visible = {"display": "none"}, {"display": "block"}
     if "message" in r:
-        return _message(r["message"], r["niveau"]), "Trajets proposés", [], cache, "", [], [], [], dash.no_update
+        return _message(r["message"], r["niveau"]), "Trajets proposés", [], cache, "", [], [], [], dash.no_update, None
 
     dep, gare = r["depart"], r["gare_arrivee"]
     retour = selection["sens"] == "retour" and bool(r["trajets_retour"])
@@ -588,7 +602,68 @@ def afficher_resultat(r, selection, categorie):
     if nouveau:
         points = [p for t in traces for p in t["points"]] + [[r["destination"]["lat"], r["destination"]["lon"]]]
         viewport = dict(bounds=[[min(p[0] for p in points), min(p[1] for p in points)], [max(p[0] for p in points), max(p[1] for p in points)]], transition="flyTo")
-    return blocs, titre, _legende_poi(categorie), visible if r["trajets_retour"] else cache, detail_statut, lignes, cercle, reperes, viewport
+    return blocs, titre, _legende_poi(categorie), visible if r["trajets_retour"] else cache, detail_statut, lignes, cercle, reperes, viewport, traces
+
+@app.callback(
+    Output("store-horloge", "data", allow_duplicate=True),
+    [Input("btn-reel", "n_clicks"), Input("btn-sim", "n_clicks")],
+    prevent_initial_call=True
+)
+def choisir_horloge(clics_reel, clics_sim):
+    """« Temps réel » : l'heure de l'ordinateur. « Simuler » : le trajet défile à partir de son départ, à vitesse accélérée."""
+    if ctx.triggered_id == "btn-sim":
+        return {"mode": "sim", "t0_reel": time.time()}
+    return {"mode": "reel"}
+
+
+LONGUEUR_TRAIN_PX = 120        # taille de l'image d'un train sur la carte, la même à tous les zooms
+ETIREMENT_TRAIN = 2.2          # les trains vus du dessus sont très fins : on les élargit pour qu'on les reconnaisse (1 = proportions réelles)
+
+
+def _repere_train(t):
+    """Repère d'un train sur la carte : son image vue du dessus, tournée dans le sens de la voie ; une pastille pour un car (pas d'image de train)."""
+    cle = sprites.cle_sprite(t["style"]["cle"], t["libelle"])
+    retard = f" · retard {t['retard_min']} min" if t["retard_min"] else ""
+    infobulle = dl.Tooltip(f"{t['libelle']} · {round(t['avancement'] * 100)} % du parcours{retard}")
+    if cle is None:
+        pastille = {**_pastille("x", 30), "background": t["style"]["couleur"]}
+        return dl.DivMarker(position=[t["lat"], t["lon"]], zIndexOffset=1000, children=[infobulle], iconOptions=dict(
+            className="train-sprite", iconSize=[30, 30], iconAnchor=[15, 15], html=f'<div style="{_css(pastille)}"><i class="fa-solid fa-bus"></i></div>'))
+    longueur = LONGUEUR_TRAIN_PX
+    hauteur = max(round(longueur / sprites.largeur_sur_hauteur(cle) * ETIREMENT_TRAIN), 12)
+    image = (f'<img src="/sprite-train/{cle}.png" style="width:{longueur}px;height:{hauteur}px;transform:rotate({t["cap"] - 90:.0f}deg);'
+             f'filter:drop-shadow(0 0 3px rgba(0,0,0,0.7))">')
+    return dl.DivMarker(position=[t["lat"], t["lon"]], zIndexOffset=1000, children=[infobulle], iconOptions=dict(
+        className="train-sprite", iconSize=[longueur, hauteur], iconAnchor=[longueur // 2, hauteur // 2], html=image))
+
+
+@app.callback(
+    [Output("map-trains", "children"), Output("suivi-etat", "children"), Output("btn-reel", "active"), Output("btn-sim", "active")],
+    [Input("tick", "n_intervals"), Input("store-etapes", "data"), Input("store-horloge", "data")]
+)
+def animer_trains(_, etapes, horloge):
+    """Place les trains du trajet choisi à l'heure courante (ordinateur) ou à l'heure simulée, chaque seconde."""
+    simulation = bool(horloge) and horloge.get("mode") == "sim"
+    if not etapes:
+        return [], "", not simulation, simulation
+    maintenant = datetime.now()
+    if simulation:
+        departs = [datetime.fromisoformat(e["depart"]) for e in etapes if e.get("depart") and not e["marche"]]
+        if departs:
+            maintenant = suivi.horloge_simulee(min(departs), datetime.fromtimestamp(horloge["t0_reel"]), maintenant)
+    etat = suivi.suivre(etapes, maintenant)
+    entete = f"Simulation · {maintenant:%d/%m %H:%M} — " if simulation else f"Temps réel · {maintenant:%H:%M} — "
+    return [_repere_train(t) for t in etat["trains"]], entete + etat["message"], not simulation, simulation
+
+
+@app.server.route("/sprite-train/<cle>.png")
+def sprite_train(cle):
+    """Image d'un train, recadrée en mémoire à partir de assets/train/ (voir lib/sprites.py)."""
+    png = sprites.sprite_png(cle) if cle in sprites.IMAGES else None
+    if png is None:
+        abort(404)
+    return Response(png, mimetype="image/png", headers={"Cache-Control": "public, max-age=86400"})
+
 
 if __name__ == "__main__":
     app.run(debug=True)

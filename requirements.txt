@@ -23,6 +23,7 @@ networkx
 # Tracé ferroviaire (src/transformation/voies.py)
 pyshp>=2.3
 shapely>=2.0
+pillow>=10
 
 # Dashboard
 dash==4.4.1

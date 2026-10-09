@@ -177,8 +177,15 @@ def style_dernier_km(mode):
     return {"cle": cle, "libelle": libelle, "couleur": couleur, "tirets": tirets}
 
 
+def _horaires(s):
+    """Départ, arrivée (texte « AAAA-MM-JJ HH:MM:SS » : le dashboard les garde dans un dcc.Store) et retard en minutes d'une section."""
+    return {"depart": str(s["depart"]) if s.get("depart") else None, "arrivee": str(s["arrivee"]) if s.get("arrivee") else None,
+            "retard_min": s.get("retard_min") or 0}
+
+
 def tracer_trajet(trajet, reseau, depart, arrivee):
-    """Un dict par étape du trajet, dans l'ordre : points [[lat, lon], …], sur_voie, style (style_ligne), libelle (« TER 880693 »), marche (vrai à pied).
+    """Un dict par étape du trajet, dans l'ordre : points [[lat, lon], …], sur_voie, style (style_ligne), libelle (« TER 880693 »), marche (vrai à pied),
+    depart, arrivee, retard_min (voir lib/suivi.py : ils servent à placer le train).
     Les trains sont collés aux voies ; un car passe par la suite de ses arrêts (droit d'un arrêt au suivant, sans suivre la route) ;
     une correspondance à pied est un trait droit en petits points.
     `depart`, `arrivee` : (lon, lat) des gares, utilisées sans train pour tracer la liaison directe."""
@@ -193,14 +200,15 @@ def tracer_trajet(trajet, reseau, depart, arrivee):
                 points, ok = [tuple(a) for a in (s.get("arrets_lonlat") or [de, vers])], False
             else:
                 points, ok = chemin(reseau, de, vers)
-            etapes.append({"points": [[lat, lon] for lon, lat in points], "sur_voie": ok, "style": style, "marche": False,
+            etapes.append({**_horaires(s), "points": [[lat, lon] for lon, lat in points], "sur_voie": ok, "style": style, "marche": False,
                            "libelle": f"{s.get('ligne') or 'Train'} {s.get('numero') or ''}".strip()})
         elif s["type"] in ("transfer", "street_network", "crow_fly") and s.get("mode") == "walking" and s["duree_s"] >= 60 and de != vers:
-            etapes.append({"points": [[de[1], de[0]], [vers[1], vers[0]]], "sur_voie": False, "style": style_dernier_km("Marche à pied"), "marche": True,
+            etapes.append({**_horaires(s), "points": [[de[1], de[0]], [vers[1], vers[0]]], "sur_voie": False, "style": style_dernier_km("Marche à pied"), "marche": True,
                            "libelle": f"À pied · {round(s['duree_s'] / 60)} min"})
     if not any(not e["marche"] for e in etapes):
         points, ok = chemin(reseau, depart, arrivee)
-        etapes.insert(0, {"points": [[lat, lon] for lon, lat in points], "sur_voie": ok, "style": style_ligne({}), "marche": False, "libelle": "Liaison directe"})
+        etapes.insert(0, {"depart": None, "arrivee": None, "retard_min": 0, "points": [[lat, lon] for lon, lat in points], "sur_voie": ok,
+                          "style": style_ligne({}), "marche": False, "libelle": "Liaison directe"})
     return etapes
 
 
