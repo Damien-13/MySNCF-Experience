@@ -10,16 +10,32 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import bus
 import culture
 import evenement
+import festival
 import gare
+import sncf
 import tourisme
+import trace_trajets
+import trains_europeens
+import transilien
+import velo
+import voies
 
 ETAPES = [
     ("gares", gare),
+    ("sncf", sncf),
+    ("transilien", transilien),
+    ("trains européens", trains_europeens),
     ("culture", culture),
     ("tourisme", tourisme),
     ("evenements", evenement),
+    ("festivals", festival),
+    ("velo", velo),
+    ("bus", bus),
+    ("tracé ferroviaire", voies),
+    ("tracé des trajets", trace_trajets),
 ]
 
 
