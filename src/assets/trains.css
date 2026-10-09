@@ -25,3 +25,9 @@
 /* Empreintes de pas des trajets à pied. */
 .pas-js { background: none; border: none; }
 .pas-js i { position: absolute; left: 0; top: 0; translate: -50% -50%; font-size: 17px; color: #2b2b2b; text-shadow: 0 0 2px #fff, 0 0 3px #fff; transform-origin: center; }
+
+/* Boutons sélectionnés (Aller / Retour, Temps réel / Simuler) : la couleur du bouton « Rechercher », pour qu'on voie tout de suite ce qui est choisi. */
+#sens .btn.active, #btn-reel.active, #btn-sim.active {
+  background-color: #c71556 !important; border-color: #c71556 !important; color: #fff !important; font-weight: 700;
+}
+#sens .btn:not(.active), #btn-reel:not(.active), #btn-sim:not(.active) { background-color: transparent; }

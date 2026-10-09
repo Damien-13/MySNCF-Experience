@@ -50,7 +50,7 @@ from datetime import date, datetime
 from lib.db.connection import get_engine
 from flask import Response, abort
 from lib import circulations, sprites, suivi
-from lib.itineraire import RAYON_POI_KM, chercher_destinations, options_gares, quand_depuis, rechercher, style_dernier_km, tracer_trajet
+from lib.itineraire import RAYON_POI_KM, chercher_destinations, etiquettes_trajets, options_gares, quand_depuis, rechercher, style_dernier_km, tracer_trajet
 from lib.reseau_ferre import charger_reseau
 
 # ==============================================================================
@@ -457,13 +457,16 @@ def _echantillon(couleur, tirets):
         position += v
     return html.Span(style={**base, "background": f"repeating-linear-gradient(90deg, {', '.join(arrets)})"})
 
-def _carte_option(i, trajet, actif, traces):
-    """Un bloc cliquable : heures, durée, correspondances, puis un trait + le nom de chaque train."""
+def _carte_option(i, trajet, actif, traces, etiquettes=()):
+    """Un bloc cliquable : étiquettes (le plus rapide…), heures, durée, correspondances, puis un trait + le nom de chaque train."""
+    puces = [html.Span([html.I(className=f"fa-solid {icone} me-1"), texte], className="badge rounded-pill me-1", style={"backgroundColor": couleur, "fontSize": "0.78rem"})
+             for texte, icone, couleur in etiquettes]
     lignes = [html.Div(className="mb-1", children=[_echantillon(t["style"]["couleur"], t["style"]["tirets"]), html.Span(t["libelle"], className="fw-bold" if not t["marche"] else ""),
                                                    html.Span("" if t["marche"] else f" · {t['style']['libelle']}", style={"opacity": 0.7})]) for t in traces]
     co2 = trajet.get("co2_g")
     retard = max([sec.get("retard_min") or 0 for sec in trajet["sections"] if sec["type"] == "public_transport"] or [0])
     return dbc.Col(xs=12, lg=4, className="mb-3", children=html.Div(id={"type": "option", "index": i}, n_clicks=0, role="button", tabIndex=0, children=[
+        *([html.Div(puces, className="mb-2")] if puces else []),
         html.Div([html.Span(f"Option {i + 1}", className="badge me-2", style={"backgroundColor": CARMILLON if actif else "#6c757d"}),
                   html.Span(f"{_heure(trajet['depart'])} → {_heure(trajet['arrivee'])}", className="fs-4 fw-bold")]),
         html.Div(f"{_duree(trajet['duree_s'])} · " + (f"{trajet['correspondances']} correspondance(s)" if trajet["correspondances"] else "direct")
@@ -483,11 +486,6 @@ def _pastille(type_, taille=26):
 def _css(style):
     """Style Dash (camelCase) → texte CSS, pour le HTML des repères de la carte."""
     return "; ".join(f"{re.sub('([A-Z])', lambda m: '-' + m.group(1).lower(), cle)}: {valeur}" for cle, valeur in style.items())
-
-def _legende_poi(categorie):
-    return [html.Span([html.Span(html.I(className=f"fa-solid {POI_ICONES[t]}"), style={**_pastille(t, 22), "display": "inline-flex", "marginRight": "6px", "verticalAlign": "middle"}),
-                       POI_LIBELLES[t]], className="me-3", style={"fontSize": "0.85rem"})
-            for t in POI_PAR_CATEGORIE.get(categorie, POI_PAR_CATEGORIE["tous"])]
 
 def _trait(points, style, epaisseur):
     """Un trait de la carte : liseré blanc dessous (sauf pour les points, où il formerait un trait plein), puis la couleur et le motif du service."""
@@ -616,7 +614,8 @@ def afficher_resultat(r, selection, categorie):
     elif not trajets:
         blocs = _message("Aucun train trouvé à cette date (l'API couvre environ 30 jours).", "warning")
     else:
-        blocs = dbc.Row([_carte_option(i, t, i == index, traces_options[i]) for i, t in enumerate(trajets)])
+        etiquettes = etiquettes_trajets(trajets)
+        blocs = dbc.Row([_carte_option(i, t, i == index, traces_options[i], etiquettes[i]) for i, t in enumerate(trajets)])
 
     co2 = trajets[index].get("co2_g") if trajets else None
     detail_statut = f"Train : {co2 / 1000:.1f} kg CO₂e par voyageur" if co2 else ("Horaires indisponibles" if r["erreur_api"] else "")
@@ -630,7 +629,7 @@ def afficher_resultat(r, selection, categorie):
     pas = [t["points"] for t in traces if t["marche"]]  # trajets à pied, dessinés en empreintes de pas
     if gare and r["dernier_km"][0] == "Marche à pied":
         pas.append([[gare["lat"], gare["lon"]], [r["destination"]["lat"], r["destination"]["lon"]]])
-    return (blocs, titre, [*_legende_poi(categorie), *_legende_dernier_km(r)], visible if r["trajets_retour"] else cache, detail_statut,
+    return (blocs, titre, _legende_dernier_km(r), visible if r["trajets_retour"] else cache, detail_statut,
             lignes, cercle, reperes, viewport, traces, pas)
 
 @app.callback(

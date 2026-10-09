@@ -170,6 +170,32 @@ def style_ligne(section):
     return {"cle": cle, "libelle": libelle, "couleur": couleur, "tirets": tirets}
 
 
+# Étiquettes des options d'un trajet, comme dans Waze : (texte, icône Font Awesome, couleur, valeur à minimiser).
+CRITERES_ETIQUETTES = (
+    ("Le plus rapide", "fa-bolt", "#0072b2", lambda t: t.get("duree_s")),
+    ("Le plus écologique", "fa-leaf", "#2e7d32", lambda t: t.get("co2_g")),
+    ("Le moins de correspondances", "fa-route", "#d55e00", lambda t: t.get("correspondances")),
+)
+
+
+def etiquettes_trajets(trajets):
+    """Pour chaque trajet, la liste des étiquettes (texte, icône, couleur) qu'il mérite : le plus rapide, le plus écologique, le moins de correspondances.
+    Une étiquette n'est donnée que si elle départage les options (si toutes sont à égalité, elle n'apprendrait rien) ; ex æquo : tous les meilleurs l'ont."""
+    etiquettes = [[] for _ in trajets]
+    if len(trajets) < 2:
+        return etiquettes
+    for texte, icone, couleur, valeur in CRITERES_ETIQUETTES:
+        valeurs = [valeur(t) for t in trajets]
+        connues = [v for v in valeurs if v is not None]
+        if len(set(connues)) < 2:
+            continue
+        meilleur = min(connues)
+        for i, v in enumerate(valeurs):
+            if v == meilleur:
+                etiquettes[i].append((texte, icone, couleur))
+    return etiquettes
+
+
 def style_dernier_km(mode):
     """Style du dernier kilomètre selon le mode conseillé (« Marche à pied », « Vélo / Bus », « Voiture / Taxi ») : petits points à pied, tirets en bus ou vélo."""
     cle = DERNIER_KM.get(mode, "pied")

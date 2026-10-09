@@ -134,6 +134,20 @@ def test_car_passe_par_ses_arrets_sans_suivre_les_rails():
     assert itineraire.tracer_trajet({"sections": [car]}, reseau, (2.0, 48.0), (2.2, 48.0))[0]["points"] == [[48.0, 2.0], [48.0, 2.2]]
 
 
+def test_etiquettes_des_options_comme_waze():
+    trajets = [{"duree_s": 3600, "co2_g": 2000, "correspondances": 1},      # le plus rapide
+               {"duree_s": 4200, "co2_g": 1500, "correspondances": 1},      # le plus écologique
+               {"duree_s": 4500, "co2_g": 1800, "correspondances": 0}]      # le moins de correspondances
+    noms = [[e[0] for e in lot] for lot in itineraire.etiquettes_trajets(trajets)]
+    assert noms == [["Le plus rapide"], ["Le plus écologique"], ["Le moins de correspondances"]]
+    egalite = [{"duree_s": 3600, "co2_g": 2000, "correspondances": 1}, {"duree_s": 3600, "co2_g": 2000, "correspondances": 1}]
+    assert itineraire.etiquettes_trajets(egalite) == [[], []]                                  # rien ne départage : pas d'étiquette
+    assert itineraire.etiquettes_trajets(trajets[:1]) == [[]]                                  # une seule option : rien à comparer
+    exaequo = [{"duree_s": 3600, "co2_g": None, "correspondances": 2}, {"duree_s": 3600, "co2_g": None, "correspondances": 0}, {"duree_s": 4000, "co2_g": None, "correspondances": 0}]
+    noms = [[e[0] for e in lot] for lot in itineraire.etiquettes_trajets(exaequo)]
+    assert noms == [["Le plus rapide"], ["Le plus rapide", "Le moins de correspondances"], ["Le moins de correspondances"]]     # ex æquo : les deux l'ont ; CO₂ inconnu : ignoré
+
+
 def test_filtre_culture_ne_garde_que_la_culture(engine):
     assert set(itineraire.pois_autour(engine, 48.009, 2.2, "culture")["type"]) == {"culture"}
     assert {o["value"] for o in itineraire.chercher_destinations("", "culture", engine, limite=100)} == {10, 12}
