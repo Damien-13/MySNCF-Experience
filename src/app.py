@@ -61,15 +61,25 @@ def get_logo_base64():
 LOGO_SRC = get_logo_base64()
 
 import dash
-from dash import dcc, html, Input, Output, State, ctx
+from dash import ALL, ClientsideFunction, ctx, dcc, html, Input, Output, State
+from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 import dash_leaflet as dl
 import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
+import json
+import re
+import threading
+import time
+from datetime import datetime, timedelta
 
 from lib.db.connection import get_engine
+from flask import Response, abort
+from lib import circulations, sprites, suivi
+from lib.itineraire import FENETRE_API_JOURS, bornes_dates, options_heures, periode_evenement, retour_minimum, RAYON_POI_KM, chercher_destinations, etiquettes_trajets, options_gares, quand_depuis, rechercher, style_dernier_km, tracer_trajet
+from lib.reseau_ferre import charger_reseau
 
 # ==============================================================================
 # 2. INITIALISATION & THÈMES
@@ -157,10 +167,21 @@ engine = get_engine()
 
 def get_gares_options():
     try:
-        df_gares = pd.read_sql("SELECT DISTINCT nom FROM lieu WHERE type = 'gare' AND nom IS NOT NULL ORDER BY nom", engine)
-        return [{'label': g, 'value': g} for g in df_gares['nom'].tolist()]
+        return options_gares(engine)
     except Exception:
-        return [{'label': "Paris Gare de Lyon", 'value': "Paris Gare de Lyon"}]
+        return []
+
+def get_reseau_ferre():
+    """Voies ferrées pour coller le tracé des trains, None si le tracé n'est pas en base (le trajet est alors une ligne droite)."""
+    try:
+        return charger_reseau(engine)
+    except Exception:
+        return None
+
+reseau_ferre = get_reseau_ferre()
+
+# Les horaires de tous les trains se chargent en arrière-plan (une dizaine de secondes) pour que le bouton « Tous les trains en direct » réponde vite.
+threading.Thread(target=lambda: circulations.charger(engine), daemon=True).start()
 
 def get_destinations_options():
     try:
@@ -198,6 +219,8 @@ def get_tab2_data(categorie="tous", regions=None, depart=None, arrivee=None, tra
             type_filter = "type IN ('culture', 'tourisme')"
         elif categorie == "evenement":
             type_filter = "type IN ('evenement')"
+        elif categorie == "tourisme":
+            type_filter = "type IN ('tourisme')"
 
         conditions = [type_filter]
         if regions:
@@ -358,287 +381,338 @@ def generate_decision_table(theme="light", regions=None, mode="pires"):
 # ==============================================================================
 # 4. LAYOUT DE L'APPLICATION (SINGLE SCREEN)
 # ==============================================================================
+HAUTEUR_CARTE = "max(640px, calc(100vh - 240px))"      # toute la hauteur de l'écran sous les KPI, pour ne pas avoir à descendre
+# Panneau des trajets (par-dessus la carte, à droite du panneau de recherche) et bouton pour le rouvrir.
+STYLE_PANNEAU = {"position": "absolute", "top": "16px", "right": "16px", "width": "300px", "maxHeight": "calc(100% - 32px)", "overflowY": "auto", "zIndex": "1000",
+                 "borderRadius": "15px", "boxShadow": "0px 4px 15px rgba(0,0,0,0.3)"}
+STYLE_OUVRIR = {"position": "absolute", "top": "16px", "right": "16px", "zIndex": "1000", "backgroundColor": CARMILLON, "border": "none", "fontWeight": "bold",
+                "boxShadow": "0px 4px 15px rgba(0,0,0,0.3)"}
 init_colors = THEME_COLORS["light"]
 gares_opts = get_gares_options()
 destinations_opts = get_destinations_options()
 departements_opts = get_departements_options()
-hours_opts = [{'label': f"{h:02d}:00", 'value': f"{h:02d}:00"} for h in range(5, 24)]
+hours_opts = options_heures(None, None)
 
-app.layout = dbc.Container(id="main-container", style={"backgroundColor": init_colors["bg"], "color": init_colors["text"], "minHeight": "100vh", "padding": "12px 20px", **transition_style}, fluid=True, children=[
-    dcc.Download(id="download-export"),
-    dcc.Store(id="store-selected-dept", data=None),
+def mise_en_page():
+    """Reconstruite à chaque ouverture de la page : les dates par défaut sont celles du jour, pas celles du démarrage du serveur."""
+    return dbc.Container(id="main-container", style={"backgroundColor": init_colors["bg"], "color": init_colors["text"], "minHeight": "100vh", "padding": "12px 20px", **transition_style}, fluid=True, children=[
+        dcc.Download(id="download-export"),
+        dcc.Store(id="store-selected-dept", data=None),
+        dcc.Store(id="store-resultat"),
+        dcc.Store(id="store-selection", data={"sens": "aller", "index": 0}),
+        dcc.Store(id="store-etapes"),
+        dcc.Store(id="store-horloge", data={"mode": "reel"}),
+        dcc.Store(id="store-js"),
+        dcc.Store(id="store-js-centre"),
+        dcc.Store(id="store-tous", data={"actif": False, "trains": []}),
+        dcc.Store(id="store-js-tous"),
+        dcc.Store(id="store-pas"),
+        dcc.Store(id="store-js-pas"),
+        dcc.Store(id="store-js-onglet"),
+        dcc.Interval(id="tick-tous", interval=120_000),
+        dcc.Interval(id="tick", interval=1000),
     
-    # MODAL DETAILS-ON-DEMAND (POP-UP TABLEAU TOP 10)
-    dbc.Modal([
-        dbc.ModalHeader(dbc.ModalTitle("🎯 Plan d'Action Opérationnel : Top 10 des Sites", className="fw-bold")),
-        dbc.ModalBody([
-            dbc.Row(className="align-items-center mb-3", children=[
-                dbc.Col(html.Span("Hiérarchisation stratégique du besoin en équipements et navettes", className="text-muted small"), width=6),
-                dbc.Col(
-                    dbc.RadioItems(
-                        id="t2-table-mode",
-                        options=[
-                            {"label": "🚨 10 zones prioritaires à équiper", "value": "pires"},
-                            {"label": "🏆 10 gares modèles d'accessibilité", "value": "meilleurs"}
-                        ],
-                        value="pires",
-                        inline=True,
-                        className="fw-bold d-flex justify-content-end"
-                    ),
-                    width=6
-                )
+        # MODAL DETAILS-ON-DEMAND (POP-UP TABLEAU TOP 10)
+        dbc.Modal([
+            dbc.ModalHeader(dbc.ModalTitle("🎯 Plan d'Action Opérationnel : Top 10 des Sites", className="fw-bold")),
+            dbc.ModalBody([
+                dbc.Row(className="align-items-center mb-3", children=[
+                    dbc.Col(html.Span("Hiérarchisation stratégique du besoin en équipements et navettes", className="text-muted small"), width=6),
+                    dbc.Col(
+                        dbc.RadioItems(
+                            id="t2-table-mode",
+                            options=[
+                                {"label": "🚨 10 zones prioritaires à équiper", "value": "pires"},
+                                {"label": "🏆 10 gares modèles d'accessibilité", "value": "meilleurs"}
+                            ],
+                            value="pires",
+                            inline=True,
+                            className="fw-bold d-flex justify-content-end"
+                        ),
+                        width=6
+                    )
+                ]),
+                html.Div(id="table-container")
             ]),
-            html.Div(id="table-container")
+            dbc.ModalFooter(
+                dbc.Button("Fermer", id="btn-close-modal", style={"backgroundColor": CARMILLON, "border": "none", "fontWeight": "bold"}, n_clicks=0)
+            )
+        ], id="modal-plan-action", size="xl", is_open=False),
+
+        # BANDEAU UNIFIÉ UNIQUE (LOGO + ONGLETS À GAUCHE)
+        dbc.Row(id="top-bar", style={"backgroundColor": init_colors["card_bg"], "borderRadius": "12px", **transition_style}, className="px-3 py-2 mb-3 shadow-sm align-items-center justify-content-between", children=[
+            dbc.Col(
+                html.Div([
+                    html.Img(id="logo-img", src=LOGO_SRC, alt="Logo MySNCF Experience", style={"maxHeight": "100px", "objectFit": "contain", "borderRadius": "6px", "padding": "2px", "marginRight": "15px"}),
+                    dbc.Tabs(
+                        id="tabs-navigation",
+                        active_tab="tab-2",
+                        className="nav-pills border-0 d-inline-flex",
+                        children=[
+                            dbc.Tab(label="Itinéraire Voyageur", tab_id="tab-1", tab_style={"cursor": "pointer"}),
+                            dbc.Tab(label="Analyse de la couverture ferroviaire", tab_id="tab-2", tab_style={"cursor": "pointer"}),
+                        ]
+                    ),
+                ], className="d-flex align-items-center"),
+                width="auto"
+            ),
+            dbc.Col(
+                dbc.Checklist(options=[{"label": "☀️ Clair / 🌙 Sombre", "value": "dark"}], value=[], id="theme-switch", switch=True, className="fw-bold d-flex justify-content-end mb-0"),
+                width="auto"
+            ),
         ]),
-        dbc.ModalFooter(
-            dbc.Button("Fermer", id="btn-close-modal", style={"backgroundColor": CARMILLON, "border": "none", "fontWeight": "bold"}, n_clicks=0)
-        )
-    ], id="modal-plan-action", size="xl", is_open=False),
 
-    # BANDEAU UNIFIÉ UNIQUE (LOGO + ONGLETS À GAUCHE)
-    dbc.Row(id="top-bar", style={"backgroundColor": init_colors["card_bg"], "borderRadius": "12px", **transition_style}, className="px-3 py-2 mb-3 shadow-sm align-items-center justify-content-between", children=[
-        dbc.Col(
-            html.Div([
-                html.Img(id="logo-img", src=LOGO_SRC, alt="Logo MySNCF Experience", style={"maxHeight": "100px", "objectFit": "contain", "borderRadius": "6px", "padding": "2px", "marginRight": "15px"}),
-                dbc.Tabs(
-                    id="tabs-navigation",
-                    active_tab="tab-2",
-                    className="nav-pills border-0 d-inline-flex",
-                    children=[
-                        dbc.Tab(label="Itinéraire Voyageur", tab_id="tab-1", tab_style={"cursor": "pointer"}),
-                        dbc.Tab(label="Analyse de la couverture ferroviaire", tab_id="tab-2", tab_style={"cursor": "pointer"}),
-                    ]
-                ),
-            ], className="d-flex align-items-center"),
-            width="auto"
-        ),
-        dbc.Col(
-            dbc.Checklist(options=[{"label": "☀️ Clair / 🌙 Sombre", "value": "dark"}], value=[], id="theme-switch", switch=True, className="fw-bold d-flex justify-content-end mb-0"),
-            width="auto"
-        ),
-    ]),
+        # CONTENU DE L'ONGLET 1 (ITINÉRAIRE)
+        html.Div(id="tab-1-content", style={"display": "none"}, children=[
+            dbc.Row([
+                dbc.Col(dbc.Card(id="card-kpi-dist", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "border": "none", **transition_style}, children=[dbc.CardBody([
+                    html.H6("Distance Gare -> Destination", style={"opacity": 0.8}), html.H3(id="kpi-distance", children="-- km", style={"color": COLORBLIND_PALETTE[2]}), html.Small(id="kpi-distance-detail", style={"opacity": 0.7})
+                ])]), width=4),
+                dbc.Col(dbc.Card(id="card-kpi-trans", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "border": "none", **transition_style}, children=[dbc.CardBody([
+                    html.H6("Transport 1er/Dernier km", style={"opacity": 0.8}), html.H3(id="kpi-intermodal", children="--", style={"color": COLORBLIND_PALETTE[1]}), html.Small(id="kpi-intermodal-detail", style={"opacity": 0.7})
+                ])]), width=4),
+                dbc.Col(dbc.Card(id="card-kpi-statut", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "border": "none", **transition_style}, children=[dbc.CardBody([
+                    html.H6("Faisabilité Décarbonée", style={"opacity": 0.8}), html.H3(id="kpi-statut", children="--", style={"color": COLORBLIND_PALETTE[0]}), html.Small(id="kpi-statut-detail", style={"opacity": 0.7})
+                ])]), width=4),
+            ], className="mb-4"),
 
-    # CONTENU DE L'ONGLET 1 (ITINÉRAIRE)
-    html.Div(id="tab-1-content", style={"display": "none"}, children=[
-        dbc.Row([
-            dbc.Col(dbc.Card(id="card-kpi-dist", className="kpi-card", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "borderTopColor": COLORBLIND_PALETTE[3], **transition_style}, children=[dbc.CardBody([
-                html.H6("Distance Gare -> Destination", className="text-uppercase text-muted fw-bold", style={"fontSize": "0.75rem"}), html.H3(id="kpi-distance", children="-- km", style={"color": COLORBLIND_PALETTE[3], "fontWeight": "bold"})
-            ])]), width=4),
-            dbc.Col(dbc.Card(id="card-kpi-trans", className="kpi-card", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "borderTopColor": COLORBLIND_PALETTE[1], **transition_style}, children=[dbc.CardBody([
-                html.H6("Transport 1er/Dernier km", className="text-uppercase text-muted fw-bold", style={"fontSize": "0.75rem"}), html.H3(id="kpi-intermodal", children="--", style={"color": COLORBLIND_PALETTE[1], "fontWeight": "bold"})
-            ])]), width=4),
-            dbc.Col(dbc.Card(id="card-kpi-statut", className="kpi-card", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "borderTopColor": COLORBLIND_PALETTE[0], **transition_style}, children=[dbc.CardBody([
-                html.H6("Faisabilité Décarbonée", className="text-uppercase text-muted fw-bold", style={"fontSize": "0.75rem"}), html.H3(id="kpi-statut", children="--", style={"color": COLORBLIND_PALETTE[0], "fontWeight": "bold"})
-            ])]), width=4),
-        ], className="g-3 mb-3"),
+            dbc.Row([
+                dbc.Col([
+                    dbc.Card(id="card-map", style={"border": "none", "backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "height": HAUTEUR_CARTE, "position": "relative", "overflow": "hidden", **transition_style}, children=[
+                        dcc.Loading(custom_spinner=custom_spinner, target_components={"map-lines": "children", "map-isochrones": "children", "map-markers": "children"}, children=[
+                            html.Div(style={"position": "relative"}, children=[
+                                        
+                                # PANNEAU RECHERCHE FLOTTANT (Onglet 1)
+                                html.Div(id="search-panel", style={
+                                    "position": "absolute", "top": "20px", "left": "20px", "zIndex": "1000",
+                                    "backgroundColor": init_colors["card_bg"], "color": init_colors["text"],
+                                    "padding": "20px", "borderRadius": "15px", "boxShadow": "0px 4px 15px rgba(0,0,0,0.2)",
+                                    "width": "340px", **transition_style
+                                }, children=[
+                                    html.H5(html.I(className="fa-solid fa-route me-2"), className="mb-3", style={"color": CARMILLON}),
+                                            
+                                    html.Label("Départ :", className="fw-bold mb-1", style={"fontSize": "0.9rem"}),
+                                    dcc.Dropdown(id="input-depart", options=gares_opts, placeholder="Gare de départ...", searchable=True, className="mb-3"),
+                                            
+                                    html.Label("Destination :", className="fw-bold mb-1", style={"fontSize": "0.9rem"}),
+                                    dcc.Dropdown(id="input-arrivee", placeholder="Rechercher un lieu...", searchable=True, search_order="original", className="mb-3"),   # garde l'ordre du serveur : ville, ses événements, le reste
+                                            
+                                    html.Div(id="info-periode", className="mb-2", style={"fontSize": "0.8rem", "opacity": 0.8}),
 
-        dbc.Row([
-            dbc.Col([
-                dbc.Card(id="card-map", className="dash-card", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "height": "580px", "position": "relative", **transition_style}, children=[
-                    dcc.Loading(custom_spinner=custom_spinner, children=[
-                        html.Div(style={"position": "relative"}, children=[
-                            
-                            # PANNEAU RECHERCHE FLOTTANT
-                            html.Div(id="search-panel", style={
-                                "position": "absolute", "top": "15px", "left": "15px", "zIndex": "1000",
-                                "backgroundColor": init_colors["card_bg"], "color": init_colors["text"],
-                                "padding": "15px", "borderRadius": "12px", "boxShadow": "0px 4px 15px rgba(0,0,0,0.2)",
-                                "width": "320px", **transition_style
-                            }, children=[
-                                html.H5(html.I(className="fa-solid fa-route me-2"), className="mb-2", style={"color": CARMILLON}),
-                                
-                                html.Label("Départ :", htmlFor="input-depart", className="fw-bold mb-1", style={"fontSize": "0.85rem"}),
-                                dcc.Dropdown(id="input-depart", options=gares_opts, placeholder="Départ...", searchable=True, className="mb-2"),
-                                
-                                html.Label("Destination :", htmlFor="input-arrivee", className="fw-bold mb-1", style={"fontSize": "0.85rem"}),
-                                dcc.Dropdown(id="input-arrivee", options=destinations_opts, placeholder="Destination...", searchable=True, className="mb-2"),
-                                
-                                html.Label("Aller :", htmlFor="date-picker-aller", className="fw-bold mb-1", style={"fontSize": "0.85rem"}),
-                                dbc.Row(className="g-2 mb-2", children=[
-                                    dbc.Col(dcc.DatePickerSingle(id="date-picker-aller", date=date.today(), display_format="DD/MM/YYYY"), width=7),
-                                    dbc.Col(dcc.Dropdown(id="time-picker-aller", options=hours_opts, placeholder="Heure"), width=5),
+                                    html.Label("Aller :", className="fw-bold mb-1", style={"fontSize": "0.9rem"}),
+                                    dbc.Row(className="g-2 mb-3", children=[
+                                        dbc.Col(dcc.DatePickerSingle(id="date-picker-aller", date=date.today(), min_date_allowed=date.today(), max_date_allowed=date.today() + timedelta(days=FENETRE_API_JOURS), display_format="DD/MM/YYYY"), width=7),
+                                        dbc.Col(dcc.Dropdown(id="time-picker-aller", options=hours_opts, placeholder="Heure"), width=5),
+                                    ]),
+                                            
+                                    dbc.Checklist(options=[{"label": "Trajet Aller/Retour", "value": 1}], value=[], id="switch-ar", switch=True, className="fw-bold mb-2", style={"fontSize": "0.9rem"}),
+                                            
+                                    html.Div(id="row-retour", style={"display": "none"}, children=[
+                                        html.Label("Retour :", className="fw-bold mb-1", style={"fontSize": "0.9rem"}),
+                                        dbc.Row(className="g-2 mb-3", children=[
+                                            dbc.Col(dcc.DatePickerSingle(id="date-picker-retour", min_date_allowed=date.today(), max_date_allowed=date.today() + timedelta(days=FENETRE_API_JOURS), display_format="DD/MM/YYYY", placeholder="Date retour"), width=7),
+                                            dbc.Col(dcc.Dropdown(id="time-picker-retour", options=hours_opts, placeholder="Heure"), width=5),
+                                        ])
+                                    ]),
+                                            
+                                    html.Hr(className="my-3", style={"opacity": "0.1"}),
+                                            
+                                    html.Label("Catégorie :", className="fw-bold mb-2", style={"fontSize": "0.9rem"}),
+                                    dbc.RadioItems(
+                                        id="filter-categorie",
+                                        options=[
+                                            {"label": html.Span([html.I(className="fa-solid fa-map-location-dot me-2"), "Toutes"]), "value": "tous"},
+                                            {"label": html.Span([html.I(className="fa-solid fa-landmark me-2"), "Musées"]), "value": "culture"},
+                                            {"label": html.Span([html.I(className="fa-solid fa-camera me-2"), "Tourisme"]), "value": "tourisme"},
+                                            {"label": html.Span([html.I(className="fa-solid fa-masks-theater me-2"), "Festivals"]), "value": "evenement"}
+                                        ],
+                                        value="tous", className="fw-bold mb-4", style={"fontSize": "0.85rem"}
+                                    ),
+                                            
+                                    dbc.Button([html.I(className="fa-solid fa-magnifying-glass me-2"), "Rechercher"], id="btn-search", style={"backgroundColor": CARMILLON, "border": "none", "width": "100%", "fontWeight": "bold", "padding": "10px"}),
+                                    dbc.Button([html.I(className="fa-solid fa-train-subway me-2"), html.Span("Tous les trains en direct", id="btn-tous-texte")], id="btn-tous",
+                                               color="secondary", outline=True, className="w-100 mt-2", style={"fontWeight": "bold", "fontSize": "0.9rem"}),
                                 ]),
-                                
-                                dbc.Checklist(options=[{"label": "Trajet Aller/Retour", "value": 1}], value=[], id="switch-ar", switch=True, className="fw-bold mb-2", style={"fontSize": "0.85rem"}),
-                                
-                                html.Div(id="row-retour", style={"display": "none"}, children=[
-                                    html.Label("Retour :", htmlFor="date-picker-retour", className="fw-bold mb-1", style={"fontSize": "0.85rem"}),
-                                    dbc.Row(className="g-2 mb-2", children=[
-                                        dbc.Col(dcc.DatePickerSingle(id="date-picker-retour", display_format="DD/MM/YYYY", placeholder="Date retour"), width=7),
-                                        dbc.Col(dcc.Dropdown(id="time-picker-retour", options=hours_opts, placeholder="Heure"), width=5),
-                                    ])
-                                ]),
-                                
-                                html.Hr(className="my-2", style={"opacity": "0.1"}),
-                                
-                                html.Label("Catégorie de POI :", htmlFor="filter-categorie", className="fw-bold mb-1", style={"fontSize": "0.85rem"}),
-                                dbc.RadioItems(
-                                    id="filter-categorie",
-                                    options=[
-                                        {"label": html.Span([html.I(className="fa-solid fa-map-location-dot me-1"), "Toutes"]), "value": "tous"},
-                                        {"label": html.Span([html.I(className="fa-solid fa-landmark me-1"), "Culture"]), "value": "culture"},
-                                        {"label": html.Span([html.I(className="fa-solid fa-masks-theater me-1"), "Festivals"]), "value": "evenement"}
-                                    ],
-                                    value="tous", className="fw-bold mb-3", style={"fontSize": "0.8rem"}
-                                ),
-                                
-                                dbc.Button([html.I(className="fa-solid fa-magnifying-glass me-2"), "Rechercher"], id="btn-search", style={"backgroundColor": CARMILLON, "border": "none", "width": "100%", "fontWeight": "bold", "padding": "8px"})
-                            ]),
 
-                            dl.Map(id="map", center=[46.2, 3.5], zoom=5, style={"width": "100%", "height": "580px", "display": "block", "margin": "0"}, children=[
-                                dl.TileLayer(id="map-tiles", url=init_colors["tiles"]),
-                                dl.LayerGroup(id="map-lines"), dl.LayerGroup(id="map-isochrones"), dl.LayerGroup(id="map-markers")
+                                # TRAJETS PROPOSÉS, par-dessus la carte : un bloc cliquable par option, Aller / Retour, avec un bouton pour fermer et rouvrir
+                                dbc.Button([html.I(className="fa-solid fa-route me-2"), "Afficher les trajets"], id="btn-ouvrir", style={**STYLE_OUVRIR, "display": "none"}),
+                                html.Div(id="panneau-resultats", style={**STYLE_PANNEAU, "display": "none"}, children=[
+                                    dbc.Card(id="card-results", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "border": "none", **transition_style}, children=[dbc.CardBody([
+                                        html.Div(className="d-flex flex-wrap align-items-center gap-2 mb-2", children=[
+                                            html.H6(id="results-title", children="Trajets proposés", className="mb-0 fw-bold", style={"display": "none"}),            # titre masqué : la carte et les horaires suffisent (l'Output reste, il est alimenté par le callback)
+                                            html.Div(dbc.RadioItems(id="sens", options=[{"label": "Aller", "value": "aller"}, {"label": "Retour", "value": "retour"}], value="aller", inline=True,
+                                                                    className="btn-group", inputClassName="btn-check", labelClassName="btn btn-outline-secondary btn-sm", labelCheckedClassName="active"),
+                                                     id="col-sens", style={"display": "none"}),
+                                            dbc.Button(html.I(className="fa-solid fa-xmark"), id="btn-fermer", color="light", size="sm", className="ms-auto", title="Masquer les trajets"),
+                                        ]),
+                                        html.Div(className="d-flex flex-wrap align-items-center gap-2 mb-2", children=[
+                                            dbc.Button([html.I(className="fa-solid fa-play me-2"), "Simuler"], id="btn-sim", color="secondary", outline=True, size="sm", title="Simuler le trajet"),
+                                            dbc.Button(html.I(className="fa-solid fa-crosshairs"), id="btn-centrer", color="secondary", outline=True, size="sm",
+                                                       title="Centrer la carte sur le train (en temps réel, ou simulé)"),
+                                            html.Div(id="suivi-etat", style={"fontSize": "0.75rem", "opacity": 0.8, "width": "100%"}),
+                                        ]),
+                                        html.Div(id="poi-legend", className="mb-2"),
+                                        dcc.Loading(type="circle", color=CARMILLON, children=html.Div(id="options-trajets", children=html.Div("Choisissez une gare de départ et une destination, puis lancez la recherche.", className="text-muted"))),
+                                    ])]),
+                                ]),
+
+                                dl.Map(id="map", center=[46.2, 3.5], zoom=5, style={"width": "100%", "height": HAUTEUR_CARTE, "display": "block", "margin": "0"}, children=[
+                                    dl.TileLayer(id="map-tiles", url=init_colors["tiles"]),
+                                    dl.LayerGroup(id="map-lines"), dl.LayerGroup(id="map-isochrones"), dl.LayerGroup(id="map-markers")
+                                ])
                             ])
                         ])
                     ])
-                ])
-            ], width=12)
-        ])
-    ]),
-
-    # CONTENU DE L'ONGLET 2 (ANALYSE SCNF - SINGLE SCREEN)
-    html.Div(id="tab-2-content", style={"display": "block"}, children=[
-        # BARRE DE RECHERCHE & FILTRES
-        dbc.Card(id="tab2-search-bar", className="dash-card mb-3", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], **transition_style}, children=[
-            dbc.CardBody(className="py-2 px-3", children=[
-                dbc.Row(className="g-2 align-items-end", children=[
-                    dbc.Col([
-                        html.Label([html.I(className="fa-solid fa-location-dot me-1"), "Départ"], htmlFor="t2-depart", className="fw-bold mb-1", style={"fontSize": "0.8rem"}),
-                        dcc.Dropdown(options=gares_opts, placeholder="Départ...", searchable=True, id="t2-depart")
-                    ], width=2),
-                    
-                    dbc.Col([
-                        html.Label([html.I(className="fa-solid fa-flag-checkered me-1"), "Destination"], htmlFor="t2-arrivee", className="fw-bold mb-1", style={"fontSize": "0.8rem"}),
-                        dcc.Dropdown(options=destinations_opts, placeholder="Destination...", searchable=True, id="t2-arrivee")
-                    ], width=2),
-                    
-                    dbc.Col([
-                        html.Label([html.I(className="fa-solid fa-map me-1"), "Région / Dép."], htmlFor="t2-region", className="fw-bold mb-1", style={"fontSize": "0.8rem"}),
-                        dcc.Dropdown(options=departements_opts, placeholder="Toutes...", id="t2-region", multi=True)
-                    ], width=3),
-                    
-                    dbc.Col([
-                        html.Label([html.I(className="fa-regular fa-calendar-days me-1"), "Période"], htmlFor="t2-periode-range", className="fw-bold mb-1", style={"fontSize": "0.8rem"}),
-                        html.Div(dcc.DatePickerRange(
-                            id="t2-periode-range",
-                            start_date=date.today(),
-                            end_date=date.today(),
-                            display_format="DD/MM/YYYY",
-                            start_date_placeholder_text="Du",
-                            end_date_placeholder_text="Au"
-                        ), style={"width": "100%"})
-                    ], width=3),
-                    
-                    dbc.Col([
-                        html.Label([html.I(className="fa-solid fa-train me-1"), "Type de train"], htmlFor="t2-train", className="fw-bold mb-1", style={"fontSize": "0.8rem"}),
-                        dcc.Dropdown(options=[{'label': t, 'value': t} for t in TRAINS], placeholder="Tous...", id="t2-train", multi=True)
-                    ], width=2),
-                ]),
-                dbc.Row(className="mt-2 align-items-center", children=[
-                    dbc.Col(
-                        html.Div([
-                            html.Span(id="drilldown-text", children="💡 Cliquez sur un point du Graphe 1 pour zoomer (Drill-down)", className="text-muted small italic me-2"),
-                            dbc.Button("✖ Réinitialiser le filtre", id="btn-reset-drilldown", color="danger", size="sm", outline=True, style={"display": "none", "fontSize": "0.75rem", "padding": "2px 8px"}, n_clicks=0)
-                        ], id="drilldown-status", className="d-flex align-items-center"),
-                        width=8, className="text-start"
-                    ),
-                    dbc.Col(
-                        dbc.Button([html.I(className="fa-solid fa-filter me-2"), "Filtrer"], id="btn-search-t2", style={"backgroundColor": CARMILLON, "border": "none", "fontWeight": "bold", "padding": "6px 20px", "borderRadius": "6px", "fontSize": "0.85rem"}),
-                        width=4, className="text-end"
-                    )
-                ])
-            ])
+                ], width=12)
+            ]),
         ]),
 
-        # KPIS
-        dcc.Loading(custom_spinner=custom_spinner, children=[
-            html.Div(id="t2-content", children=[
-                dbc.Row(className="g-3 mb-3", children=[
-                    dbc.Col(dbc.Card(id="card-kpi-global-1", className="kpi-card", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "borderTopColor": "#10b981", **transition_style}, children=[dbc.CardBody(className="py-2 px-3", children=[
-                        html.Div([
-                            html.H6("Taux de couverture (< 5km)", className="text-uppercase text-muted fw-bold m-0 me-1", style={"fontSize": "0.7rem"}),
-                            html.I(className="fa-solid fa-circle-info text-muted", id="tooltip-kpi-1-target", style={"fontSize": "0.75rem", "cursor": "pointer"}),
-                            dbc.Tooltip("Pourcentage de sites touristiques situés à moins de 5 km d'une gare SNCF.", target="tooltip-kpi-1-target", placement="top")
-                        ], className="d-flex align-items-center mb-1"),
-                        html.H4(id="t2-kpi-couverture", children="82.4 %", style={"color": "#10b981", "fontWeight": "bold", "margin": "0"})
-                    ])]), width=4),
+        # CONTENU DE L'ONGLET 2 (ANALYSE SCNF - SINGLE SCREEN)
+        html.Div(id="tab-2-content", style={"display": "block"}, children=[
+            # BARRE DE RECHERCHE & FILTRES
+            dbc.Card(id="tab2-search-bar", className="dash-card mb-3", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], **transition_style}, children=[
+                dbc.CardBody(className="py-2 px-3", children=[
+                    dbc.Row(className="g-2 align-items-end", children=[
+                        dbc.Col([
+                            html.Label([html.I(className="fa-solid fa-location-dot me-1"), "Départ"], htmlFor="t2-depart", className="fw-bold mb-1", style={"fontSize": "0.8rem"}),
+                            dcc.Dropdown(options=gares_opts, placeholder="Départ...", searchable=True, id="t2-depart")
+                        ], width=2),
                     
-                    dbc.Col(dbc.Card(id="card-kpi-global-2", className="kpi-card", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "borderTopColor": COLORBLIND_PALETTE[1], **transition_style}, children=[dbc.CardBody(className="py-2 px-3", children=[
-                        html.Div([
-                            html.H6("Sites accessibles sans voiture", className="text-uppercase text-muted fw-bold m-0 me-1", style={"fontSize": "0.7rem"}),
-                            html.I(className="fa-solid fa-circle-info text-muted", id="tooltip-kpi-2-target", style={"fontSize": "0.75rem", "cursor": "pointer"}),
-                            dbc.Tooltip("Nombre total de POI directement reliés par la marche, le vélo ou les transports urbains.", target="tooltip-kpi-2-target", placement="top")
-                        ], className="d-flex align-items-center mb-1"),
-                        html.H4(id="t2-kpi-sites", children="14 530", style={"color": COLORBLIND_PALETTE[1], "fontWeight": "bold", "margin": "0"})
-                    ])]), width=4),
+                        dbc.Col([
+                            html.Label([html.I(className="fa-solid fa-flag-checkered me-1"), "Destination"], htmlFor="t2-arrivee", className="fw-bold mb-1", style={"fontSize": "0.8rem"}),
+                            dcc.Dropdown(options=destinations_opts, placeholder="Destination...", searchable=True, id="t2-arrivee")
+                        ], width=2),
                     
-                    dbc.Col(dbc.Card(id="card-kpi-global-3", className="kpi-card", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "borderTopColor": CARMILLON, **transition_style}, children=[dbc.CardBody(className="py-2 px-3", children=[
-                        html.Div([
-                            html.H6("Zones Blanches (> 15km gare)", className="text-uppercase text-muted fw-bold m-0 me-1", style={"fontSize": "0.7rem"}),
-                            html.I(className="fa-solid fa-circle-info text-muted", id="tooltip-kpi-3-target", style={"fontSize": "0.75rem", "cursor": "pointer"}),
-                            dbc.Tooltip("Pourcentage de sites très éloignés des gares nécessitant une navette dédiée ou une voiture.", target="tooltip-kpi-3-target", placement="top")
-                        ], className="d-flex align-items-center mb-1"),
-                        html.H4(id="t2-kpi-blanches", children="17.6 %", style={"color": CARMILLON, "fontWeight": "bold", "margin": "0"})
-                    ])]), width=4),
-                ]),
+                        dbc.Col([
+                            html.Label([html.I(className="fa-solid fa-map me-1"), "Région / Dép."], htmlFor="t2-region", className="fw-bold mb-1", style={"fontSize": "0.8rem"}),
+                            dcc.Dropdown(options=departements_opts, placeholder="Toutes...", id="t2-region", multi=True)
+                        ], width=3),
+                    
+                        dbc.Col([
+                            html.Label([html.I(className="fa-regular fa-calendar-days me-1"), "Période"], htmlFor="t2-periode-range", className="fw-bold mb-1", style={"fontSize": "0.8rem"}),
+                            html.Div(dcc.DatePickerRange(
+                                id="t2-periode-range",
+                                start_date=date.today(),
+                                end_date=date.today(),
+                                display_format="DD/MM/YYYY",
+                                start_date_placeholder_text="Du",
+                                end_date_placeholder_text="Au"
+                            ), style={"width": "100%"})
+                        ], width=3),
+                    
+                        dbc.Col([
+                            html.Label([html.I(className="fa-solid fa-train me-1"), "Type de train"], htmlFor="t2-train", className="fw-bold mb-1", style={"fontSize": "0.8rem"}),
+                            dcc.Dropdown(options=[{'label': t, 'value': t} for t in TRAINS], placeholder="Tous...", id="t2-train", multi=True)
+                        ], width=2),
+                    ]),
+                    dbc.Row(className="mt-2 align-items-center", children=[
+                        dbc.Col(
+                            html.Div([
+                                html.Span(id="drilldown-text", children="💡 Cliquez sur un point du Graphe 1 pour zoomer (Drill-down)", className="text-muted small italic me-2"),
+                                dbc.Button("✖ Réinitialiser le filtre", id="btn-reset-drilldown", color="danger", size="sm", outline=True, style={"display": "none", "fontSize": "0.75rem", "padding": "2px 8px"}, n_clicks=0)
+                            ], id="drilldown-status", className="d-flex align-items-center"),
+                            width=8, className="text-start"
+                        ),
+                        dbc.Col(
+                            dbc.Button([html.I(className="fa-solid fa-filter me-2"), "Filtrer"], id="btn-search-t2", style={"backgroundColor": CARMILLON, "border": "none", "fontWeight": "bold", "padding": "6px 20px", "borderRadius": "6px", "fontSize": "0.85rem"}),
+                            width=4, className="text-end"
+                        )
+                    ])
+                ])
+            ]),
 
-                # DISPOSITION RANGÉE : GRAPHE 1 À GAUCHE, GRAPHES 3 & 4 À DROITE
-                dbc.Row(className="g-3 mb-3", children=[
-                    # COLONNE GAUCHE : GRAPHE 1
-                    dbc.Col([
-                        dbc.Card(id="card-g1", className="dash-card p-2", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], **transition_style}, children=[
-                            html.Div(
-                                role="region",
-                                children=[dcc.Graph(id="graph-1", style={"height": "480px"})],
-                                **{"aria-label": "Volume de sites x accessibilité ferroviaire, par département"}
-                            )
-                        ])
-                    ], width=6),
+            # KPIS
+            dcc.Loading(custom_spinner=custom_spinner, children=[
+                html.Div(id="t2-content", children=[
+                    dbc.Row(className="g-3 mb-3", children=[
+                        dbc.Col(dbc.Card(id="card-kpi-global-1", className="kpi-card", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "borderTopColor": "#10b981", **transition_style}, children=[dbc.CardBody(className="py-2 px-3", children=[
+                            html.Div([
+                                html.H6("Taux de couverture (< 5km)", className="text-uppercase text-muted fw-bold m-0 me-1", style={"fontSize": "0.7rem"}),
+                                html.I(className="fa-solid fa-circle-info text-muted", id="tooltip-kpi-1-target", style={"fontSize": "0.75rem", "cursor": "pointer"}),
+                                dbc.Tooltip("Pourcentage de sites touristiques situés à moins de 5 km d'une gare SNCF.", target="tooltip-kpi-1-target", placement="top")
+                            ], className="d-flex align-items-center mb-1"),
+                            html.H4(id="t2-kpi-couverture", children="82.4 %", style={"color": "#10b981", "fontWeight": "bold", "margin": "0"})
+                        ])]), width=4),
                     
-                    # COLONNE DROITE : GRAPHE 3 & 4 EMPILÉS
-                    dbc.Col([
-                        dbc.Card(id="card-g3", className="dash-card p-2 mb-3", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], **transition_style}, children=[
-                            html.Div(
-                                role="region",
-                                children=[dcc.Graph(id="graph-3", style={"height": "225px"})],
-                                **{"aria-label": "Répartition des sites par tranche de distance"}
-                            )
-                        ]),
-                        dbc.Card(id="card-g4-saison", className="dash-card p-2", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], **transition_style}, children=[
-                            html.Div(
-                                role="region",
-                                children=[dcc.Graph(id="graph-4", style={"height": "225px"})],
-                                **{"aria-label": "Saisonnalité de la demande événementielle par mois"}
-                            )
-                        ])
-                    ], width=6)
-                ]),
+                        dbc.Col(dbc.Card(id="card-kpi-global-2", className="kpi-card", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "borderTopColor": COLORBLIND_PALETTE[1], **transition_style}, children=[dbc.CardBody(className="py-2 px-3", children=[
+                            html.Div([
+                                html.H6("Sites accessibles sans voiture", className="text-uppercase text-muted fw-bold m-0 me-1", style={"fontSize": "0.7rem"}),
+                                html.I(className="fa-solid fa-circle-info text-muted", id="tooltip-kpi-2-target", style={"fontSize": "0.75rem", "cursor": "pointer"}),
+                                dbc.Tooltip("Nombre total de POI directement reliés par la marche, le vélo ou les transports urbains.", target="tooltip-kpi-2-target", placement="top")
+                            ], className="d-flex align-items-center mb-1"),
+                            html.H4(id="t2-kpi-sites", children="14 530", style={"color": COLORBLIND_PALETTE[1], "fontWeight": "bold", "margin": "0"})
+                        ])]), width=4),
+                    
+                        dbc.Col(dbc.Card(id="card-kpi-global-3", className="kpi-card", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "borderTopColor": CARMILLON, **transition_style}, children=[dbc.CardBody(className="py-2 px-3", children=[
+                            html.Div([
+                                html.H6("Zones Blanches (> 15km gare)", className="text-uppercase text-muted fw-bold m-0 me-1", style={"fontSize": "0.7rem"}),
+                                html.I(className="fa-solid fa-circle-info text-muted", id="tooltip-kpi-3-target", style={"fontSize": "0.75rem", "cursor": "pointer"}),
+                                dbc.Tooltip("Pourcentage de sites très éloignés des gares nécessitant une navette dédiée ou une voiture.", target="tooltip-kpi-3-target", placement="top")
+                            ], className="d-flex align-items-center mb-1"),
+                            html.H4(id="t2-kpi-blanches", children="17.6 %", style={"color": CARMILLON, "fontWeight": "bold", "margin": "0"})
+                        ])]), width=4),
+                    ]),
 
-                # RANGÉE BASSE DE PILOTAGE : BOUTON PLAN D'ACTION + EXPORT DE RAPPORT
-                dbc.Row(className="g-3", children=[
-                    dbc.Col(
-                        dbc.Card(className="dash-card p-2 px-3", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], **transition_style}, children=[
-                            dbc.Row(className="align-items-center", children=[
-                                dbc.Col([
-                                    html.H6([html.I(className="fa-solid fa-sliders me-2", style={"color": CARMILLON}), "Outils d'Aide à la Décision"], className="fw-bold m-0 text-uppercase", style={"fontSize": "0.85rem"}),
-                                    html.Small("Consultez la feuille de route opérationnelle ou téléchargez la synthèse stratégique.", className="text-muted")
-                                ], width=6),
-                                dbc.Col([
-                                    dbc.Button([html.I(className="fa-solid fa-list-check me-2"), "🎯 Plan d'Action (Top 10)"], id="btn-open-modal", style={"backgroundColor": CARMILLON, "border": "none", "fontWeight": "bold", "fontSize": "0.85rem", "marginRight": "10px"}, n_clicks=0),
-                                    dbc.Tooltip("Ouvre la matrice décisionnelle complète détaillant les gares et sites prioritaires.", target="btn-open-modal", placement="top"),
-                                    
-                                    dbc.Button([html.I(className="fa-solid fa-file-arrow-down me-2"), "📄 Exporter le Rapport"], id="btn-export-report", color="dark", outline=True, style={"fontWeight": "bold", "fontSize": "0.85rem"}, n_clicks=0),
-                                    dbc.Tooltip("Télécharge un rapport synthétique au format HTML (imprimable en PDF) incluant les KPIs et le plan d'action.", target="btn-export-report", placement="top")
-                                ], width=6, className="d-flex justify-content-end align-items-center")
+                    # DISPOSITION RANGÉE : GRAPHE 1 À GAUCHE, GRAPHES 3 & 4 À DROITE
+                    dbc.Row(className="g-3 mb-3", children=[
+                        # COLONNE GAUCHE : GRAPHE 1
+                        dbc.Col([
+                            dbc.Card(id="card-g1", className="dash-card p-2", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], **transition_style}, children=[
+                                html.Div(
+                                    role="region",
+                                    children=[dcc.Graph(id="graph-1", style={"height": "480px"})],
+                                    **{"aria-label": "Volume de sites x accessibilité ferroviaire, par département"}
+                                )
                             ])
-                        ]),
-                        width=12
-                    )
+                        ], width=6),
+                    
+                        # COLONNE DROITE : GRAPHE 3 & 4 EMPILÉS
+                        dbc.Col([
+                            dbc.Card(id="card-g3", className="dash-card p-2 mb-3", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], **transition_style}, children=[
+                                html.Div(
+                                    role="region",
+                                    children=[dcc.Graph(id="graph-3", style={"height": "225px"})],
+                                    **{"aria-label": "Répartition des sites par tranche de distance"}
+                                )
+                            ]),
+                            dbc.Card(id="card-g4-saison", className="dash-card p-2", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], **transition_style}, children=[
+                                html.Div(
+                                    role="region",
+                                    children=[dcc.Graph(id="graph-4", style={"height": "225px"})],
+                                    **{"aria-label": "Saisonnalité de la demande événementielle par mois"}
+                                )
+                            ])
+                        ], width=6)
+                    ]),
+
+                    # RANGÉE BASSE DE PILOTAGE : BOUTON PLAN D'ACTION + EXPORT DE RAPPORT
+                    dbc.Row(className="g-3", children=[
+                        dbc.Col(
+                            dbc.Card(className="dash-card p-2 px-3", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], **transition_style}, children=[
+                                dbc.Row(className="align-items-center", children=[
+                                    dbc.Col([
+                                        html.H6([html.I(className="fa-solid fa-sliders me-2", style={"color": CARMILLON}), "Outils d'Aide à la Décision"], className="fw-bold m-0 text-uppercase", style={"fontSize": "0.85rem"}),
+                                        html.Small("Consultez la feuille de route opérationnelle ou téléchargez la synthèse stratégique.", className="text-muted")
+                                    ], width=6),
+                                    dbc.Col([
+                                        dbc.Button([html.I(className="fa-solid fa-list-check me-2"), "🎯 Plan d'Action (Top 10)"], id="btn-open-modal", style={"backgroundColor": CARMILLON, "border": "none", "fontWeight": "bold", "fontSize": "0.85rem", "marginRight": "10px"}, n_clicks=0),
+                                        dbc.Tooltip("Ouvre la matrice décisionnelle complète détaillant les gares et sites prioritaires.", target="btn-open-modal", placement="top"),
+                                    
+                                        dbc.Button([html.I(className="fa-solid fa-file-arrow-down me-2"), "📄 Exporter le Rapport"], id="btn-export-report", color="dark", outline=True, style={"fontWeight": "bold", "fontSize": "0.85rem"}, n_clicks=0),
+                                        dbc.Tooltip("Télécharge un rapport synthétique au format HTML (imprimable en PDF) incluant les KPIs et le plan d'action.", target="btn-export-report", placement="top")
+                                    ], width=6, className="d-flex justify-content-end align-items-center")
+                                ])
+                            ]),
+                            width=12
+                        )
+                    ])
                 ])
             ])
         ])
     ])
-])
+
+
+app.layout = mise_en_page
 
 # ==============================================================================
 # 5. CALLBACKS
@@ -729,6 +803,13 @@ def switch_tab_content(active_tab):
         return {"display": "block"}, {"display": "none"}
     return {"display": "none"}, {"display": "block"}
 
+# La carte est créée dans l'onglet caché : elle recalcule sa taille quand on ouvre l'onglet Itinéraire (src/assets/trains.js).
+app.clientside_callback(
+    ClientsideFunction(namespace="trains", function_name="afficherOnglet"),
+    Output("store-js-onglet", "data"),
+    Input("tabs-navigation", "active_tab")
+)
+
 @app.callback(
     Output("modal-plan-action", "is_open"),
     [Input("btn-open-modal", "n_clicks"), Input("btn-close-modal", "n_clicks")],
@@ -743,16 +824,95 @@ def toggle_modal(n1, n2, is_open):
 def toggle_return_fields(ar_checked):
     return {"display": "block"} if ar_checked and 1 in ar_checked else {"display": "none"}
 
+def _jour(texte):
+    return date.fromisoformat(str(texte)[:10]) if texte else None
+
+
+def _quand_aller(jour, heure):
+    """Départ de l'aller d'après le formulaire (maintenant si le jour est aujourd'hui sans heure, 8 h sinon)."""
+    return quand_depuis(jour, heure) if jour else None
+
+
+@app.callback(
+    [Output("date-picker-aller", "date"), Output("date-picker-aller", "min_date_allowed"), Output("date-picker-aller", "max_date_allowed"), Output("info-periode", "children")],
+    Input("input-arrivee", "value"),
+    State("date-picker-aller", "date")
+)
+def calendrier_selon_evenement(lieu, jour):
+    """Un événement n'a lieu que sur sa période : le calendrier de l'aller s'y limite (pas de train bien avant), et la date est ramenée dans la période."""
+    try:
+        periode = periode_evenement(engine, lieu)
+    except Exception:
+        periode = None
+    mini, maxi, dans_fenetre = bornes_dates(periode)
+    choisi = min(max(_jour(jour) or mini, mini), maxi)
+    info = ""
+    if periode and not dans_fenetre:
+        info = f"Événement du {periode[0]:%d/%m} au {periode[1]:%d/%m} : hors des {FENETRE_API_JOURS} jours couverts par l'API SNCF."
+    elif periode and (periode[1] - periode[0]).days < 300:
+        info = f"Événement du {periode[0]:%d/%m} au {periode[1]:%d/%m}" if periode[0] != periode[1] else f"Événement le {periode[0]:%d/%m}"
+    return choisi.isoformat(), mini.isoformat(), maxi.isoformat(), info
+
+
+@app.callback(
+    [Output("time-picker-aller", "options"), Output("time-picker-aller", "value")],
+    Input("date-picker-aller", "date"),
+    State("time-picker-aller", "value")
+)
+def heures_aller(jour, heure):
+    """Les heures déjà passées aujourd'hui sont grisées."""
+    options = options_heures(_jour(jour), datetime.now())
+    return options, (None if any(o["disabled"] and o["value"] == heure for o in options) else heure)
+
+
+@app.callback(
+    [Output("date-picker-retour", "date"), Output("date-picker-retour", "min_date_allowed"), Output("date-picker-retour", "max_date_allowed")],
+    [Input("date-picker-aller", "date"), Input("time-picker-aller", "value"), Input("date-picker-aller", "max_date_allowed")],
+    State("date-picker-retour", "date")
+)
+def calendrier_retour(jour, heure, maxi, retour):
+    """Le retour ne peut pas précéder l'aller (ni dépasser la fin de la période de l'événement)."""
+    aller = _quand_aller(_jour(jour), heure)
+    mini = retour_minimum(aller).date() if aller else date.today()
+    maxi = _jour(maxi) or date.today() + timedelta(days=FENETRE_API_JOURS)
+    choisi = _jour(retour)
+    if choisi and not (mini <= choisi <= maxi):
+        choisi = None
+    return (choisi.isoformat() if choisi else None), mini.isoformat(), maxi.isoformat()
+
+
+@app.callback(
+    [Output("time-picker-retour", "options"), Output("time-picker-retour", "value")],
+    [Input("date-picker-retour", "date"), Input("date-picker-aller", "date"), Input("time-picker-aller", "value")],
+    State("time-picker-retour", "value")
+)
+def heures_retour(retour, jour, heure, heure_retour):
+    """Le retour part au moins une heure après l'aller : les heures qui précèdent sont grisées."""
+    aller = _quand_aller(_jour(jour), heure)
+    options = options_heures(_jour(retour), retour_minimum(aller))
+    return options, (None if any(o["disabled"] and o["value"] == heure_retour for o in options) else heure_retour)
+
+
+def _option_destination(o, recherche=""):
+    """Option du menu de destination avec le pictogramme de son type : ville, événement, culture ou tourisme.
+    Le menu (Dash 4) refiltre les options dans le navigateur sur le texte « search » : il cacherait la ville de Huez pour « Alpe d'Huez ».
+    Toutes les options reçoivent donc la saisie comme texte de recherche (le tri, lui, est gardé par search_order="original")."""
+    icone = "fa-city" if o["type"] == "ville" else POI_ICONES.get(o["type"], "fa-location-dot")
+    couleur = "#555555" if o["type"] == "ville" else POI_COULEURS.get(o["type"], "#555555")
+    return {"label": html.Span([html.I(className=f"fa-solid {icone} me-2", style={"color": couleur, "width": "1.1em", "textAlign": "center"}), o["label"]]),
+            "value": o["value"], "search": recherche or o["label"]}
+
+
 @app.callback(
     Output("input-arrivee", "options"),
-    [Input("filter-categorie", "value")]
+    [Input("input-arrivee", "search_value"), Input("filter-categorie", "value")],
+    State("input-arrivee", "value")
 )
-def update_poi_dropdown(categorie):
+def update_destinations(recherche, categorie, choisi):
     try:
-        type_filter = "IN ('culture', 'tourisme')" if categorie == "culture" else "IN ('evenement')" if categorie == "evenement" else "NOT IN ('gare', 'arret_bus', 'arret_train')"
-        return [{'label': p, 'value': p} for p in pd.read_sql(f"SELECT DISTINCT nom FROM lieu WHERE type {type_filter} AND nom IS NOT NULL ORDER BY nom LIMIT 1000", engine)['nom'].tolist()]
-    except Exception: 
-        return [{'label': p, 'value': p} for p in ["Château de Versailles", "Musée du Louvre"]]
+        return [_option_destination(o, recherche) for o in chercher_destinations(recherche, categorie, engine, inclure=choisi)]
+    except Exception:
+        return []
 
 @app.callback(
     [Output("main-container", "style"), Output("top-bar", "style"), Output("search-panel", "style"), Output("logo-img", "style"),
@@ -765,7 +925,8 @@ def update_poi_dropdown(categorie):
      Output("t2-kpi-couverture", "children"), Output("t2-kpi-sites", "children"), Output("t2-kpi-blanches", "children"),
      Output("graph-1", "figure"), Output("graph-3", "figure"), Output("graph-4", "figure"),
      Output("table-container", "children"),
-     Output("drilldown-text", "children"), Output("btn-reset-drilldown", "style")],
+     Output("drilldown-text", "children"), Output("btn-reset-drilldown", "style"),
+     Output("card-results", "style")],
     [Input("theme-switch", "value"), Input("filter-categorie", "value"), 
      Input("btn-search-t2", "n_clicks"), Input("t2-table-mode", "value"),
      Input("graph-1", "clickData"), Input("btn-reset-drilldown", "n_clicks")],
@@ -777,11 +938,13 @@ def update_ui_and_graphs(theme_values, categorie, t2_clicks, table_mode, click_d
     
     card_st = {"backgroundColor": colors["card_bg"], "color": colors["text"], **transition_style}
     
+    card_iti = {**card_st, "border": "none"}         # cartes de l'onglet Itinéraire
+    
     search_panel_st = {
-        "position": "absolute", "top": "15px", "left": "15px", "zIndex": "1000",
+        "position": "absolute", "top": "20px", "left": "20px", "zIndex": "1000",
         "backgroundColor": colors["card_bg"], "color": colors["text"],
-        "padding": "15px", "borderRadius": "12px", "boxShadow": "0px 4px 15px rgba(0,0,0,0.2)",
-        "width": "320px", **transition_style
+        "padding": "20px", "borderRadius": "15px", "boxShadow": "0px 4px 15px rgba(0,0,0,0.2)",
+        "width": "340px", **transition_style
     }
     
     search_bar_t2_st = {"backgroundColor": colors["card_bg"], "color": colors["text"], **transition_style}
@@ -870,43 +1033,313 @@ def update_ui_and_graphs(theme_values, categorie, t2_clicks, table_mode, click_d
         {"backgroundColor": colors["bg"], "color": colors["text"], "minHeight": "100vh", "padding": "12px 20px", **transition_style},
         {"backgroundColor": colors["card_bg"], "borderRadius": "12px", "color": colors["text"], **transition_style}, 
         search_panel_st, logo_st, search_bar_t2_st,
+        card_iti, card_iti, card_iti,
         card_st, card_st, card_st,
-        card_st, card_st, card_st,
-        {"backgroundColor": colors["card_bg"], "color": colors["text"], "height": "580px", "position": "relative", **transition_style},
+        {"backgroundColor": colors["card_bg"], "color": colors["text"], "border": "none", "height": HAUTEUR_CARTE, "position": "relative", "overflow": "hidden", **transition_style},
         card_st, card_st, card_st,
         colors["tiles"],
         kpi_couv, kpi_sites, kpi_blanc,
         fig1, fig3, fig4, generate_decision_table(theme, selected_regions, mode=table_mode),
-        drilldown_text, btn_reset_style
+        drilldown_text, btn_reset_style, card_iti
     )
+
+POI_COULEURS = {"culture": COLORBLIND_PALETTE[0], "tourisme": "#984ea3", "evenement": COLORBLIND_PALETTE[1]}
+POI_LIBELLES = {"culture": "Musée / culture", "tourisme": "Tourisme", "evenement": "Festival / événement"}
+POI_ICONES = {"culture": "fa-landmark", "tourisme": "fa-camera", "evenement": "fa-masks-theater"}
+POI_PAR_CATEGORIE = {"tous": ["tourisme", "culture", "evenement"], "culture": ["culture"], "tourisme": ["tourisme"], "evenement": ["evenement"]}
+
+
+def _duree(secondes):
+    h, m = divmod(round(secondes / 60), 60)
+    return f"{h} h {m:02d}" if h else f"{m} min"
+
+def _heure(texte):
+    return datetime.fromisoformat(texte).strftime("%H:%M")
+
+def _echantillon(couleur, tirets):
+    """Petit trait qui reprend la couleur et le motif d'un service (pour reconnaître la ligne sur la carte sans se fier à la couleur)."""
+    base = {"display": "inline-block", "width": "38px", "height": "5px", "marginRight": "8px", "verticalAlign": "middle", "borderRadius": "3px"}
+    if not tirets:
+        return html.Span(style={**base, "backgroundColor": couleur})
+    arrets, position = [], 0.0
+    for i, v in enumerate(float(v) * 1.6 for v in tirets.split()):         # rangs pairs : trait, rangs impairs : vide
+        arrets.append(f"{couleur if i % 2 == 0 else 'transparent'} {position:.0f}px {position + v:.0f}px")
+        position += v
+    return html.Span(style={**base, "background": f"repeating-linear-gradient(90deg, {', '.join(arrets)})"})
+
+def _carte_option(i, trajet, actif, traces, etiquettes=()):
+    """Un bloc cliquable : étiquettes (le plus rapide…), heures, durée, correspondances, puis un trait + le nom de chaque train."""
+    puces = [html.Span([html.I(className=f"fa-solid {icone} me-1"), texte], className="badge rounded-pill me-1", style={"backgroundColor": couleur, "fontSize": "0.68rem"})
+             for texte, icone, couleur in etiquettes]
+    lignes = [html.Div(className="mb-0", style={"fontSize": "0.8rem", "whiteSpace": "nowrap", "overflow": "hidden", "textOverflow": "ellipsis"}, children=[_echantillon(t["style"]["couleur"], t["style"]["tirets"]), html.Span(t["libelle"], className="fw-bold" if not t["marche"] else ""),
+                                                   html.Span("" if t["marche"] else f" · {t['style']['libelle']}", style={"opacity": 0.7})]) for t in traces]
+    co2 = trajet.get("co2_g")
+    retard = max([sec.get("retard_min") or 0 for sec in trajet["sections"] if sec["type"] == "public_transport"] or [0])
+    return html.Div(style={"flex": "0 0 auto"}, children=html.Div(id={"type": "option", "index": i}, n_clicks=0, role="button", tabIndex=0, children=[
+        *([html.Div(puces, className="mb-2")] if puces else []),
+        html.Div([html.Span(f"Option {i + 1}", className="badge me-2", style={"backgroundColor": CARMILLON if actif else "#6c757d"}),
+                  html.Span(f"{_heure(trajet['depart'])} → {_heure(trajet['arrivee'])}", className="fs-6 fw-bold")]),
+        html.Div(f"{_duree(trajet['duree_s'])} · " + (f"{trajet['correspondances']} corresp." if trajet["correspondances"] else "direct")
+                 + (f" · {co2 / 1000:.1f} kg CO₂e" if co2 else ""), className="mb-1", style={"opacity": 0.8, "fontSize": "0.78rem"}),
+        *([html.Div(f"Retard annoncé : {retard} min", className="mb-2 fw-bold", style={"color": "#c0392b"})] if retard else []),
+        *(lignes if actif else []),                   # le détail des trains n'apparaît qu'au clic sur l'option
+    ], style={"cursor": "pointer", "padding": "8px 10px", "borderRadius": "10px", "height": "100%",
+              "border": f"3px solid {CARMILLON}" if actif else "1px solid rgba(128,128,128,0.35)",
+              "boxShadow": "0px 4px 14px rgba(0,0,0,0.18)" if actif else "none", "transition": "all 0.2s ease"}))
+
+def _pastille(type_, taille=26):
+    """Style d'une pastille ronde de la couleur de la catégorie, avec le pictogramme en blanc (comme les repères de Google Maps)."""
+    return {"width": f"{taille}px", "height": f"{taille}px", "borderRadius": "50%", "background": POI_COULEURS.get(type_, "#555555"), "color": "white",
+            "border": "2px solid white", "boxShadow": "0 1px 5px rgba(0,0,0,0.45)", "display": "flex", "alignItems": "center", "justifyContent": "center",
+            "fontSize": f"{taille // 2}px"}
+
+def _css(style):
+    """Style Dash (camelCase) → texte CSS, pour le HTML des repères de la carte."""
+    return "; ".join(f"{re.sub('([A-Z])', lambda m: '-' + m.group(1).lower(), cle)}: {valeur}" for cle, valeur in style.items())
+
+def _trait(points, style, epaisseur):
+    """Un trait de la carte : liseré blanc dessous (sauf pour les points, où il formerait un trait plein), puis la couleur et le motif du service."""
+    pointille = style["cle"] in ("bus", "pied")
+    trait = dl.Polyline(positions=points, color=style["couleur"], weight=epaisseur + 1 if pointille else epaisseur, dashArray=style["tirets"],
+                        lineCap="round" if style["cle"] in ("rer", "bus", "pied") else "butt")
+    return [trait] if pointille else [dl.Polyline(positions=points, color="white", weight=epaisseur + 4, opacity=0.9), trait]
+
+def _calques(r, traces, categorie):
+    """(lignes, cercle, repères) de la carte : un trait par train (liseré blanc dessous), dernier kilomètre en pointillés, lieux de la catégorie autour de la destination."""
+    dep, dest, gare = r["depart"], r["destination"], r["gare_arrivee"]
+    lignes = []
+    for t in traces:
+        if not t["marche"]:                                  # la marche est dessinée en empreintes de pas par trains.js (store-pas)
+            lignes += _trait(t["points"], t["style"], 5)
+    reperes = [dl.Marker(position=[dep["lat"], dep["lon"]], children=[dl.Tooltip(f"Départ : {dep['nom']}")]),
+               dl.Marker(position=[dest["lat"], dest["lon"]], children=[dl.Tooltip(f"Destination : {dest['nom']}")])]
+    if gare and r["dernier_km"][0] != "Marche à pied":       # à pied : empreintes ; en vélo, bus ou voiture : trait, expliqué dans la légende
+        lignes += _trait([[gare["lat"], gare["lon"]], [dest["lat"], dest["lon"]]], style_dernier_km(r["dernier_km"][0]), 4)
+        reperes.append(dl.CircleMarker(center=[gare["lat"], gare["lon"]], radius=8, color=CARMILLON, fillOpacity=0.9, children=[dl.Tooltip(f"Gare d'arrivée : {gare['nom']}")]))
+    reperes += [dl.DivMarker(position=[p["lat"], p["lon"]], iconOptions=dict(className="poi-pastille", iconSize=[26, 26], iconAnchor=[13, 13],
+                                                                             html=f'<div style="{_css(_pastille(p["type"]))}"><i class="fa-solid {POI_ICONES.get(p["type"], "fa-location-dot")}"></i></div>'),
+                             children=[dl.Tooltip(f"{p['nom'] or p['type']} · {POI_LIBELLES.get(p['type'], p['type'])} · {p['distance_km']:.1f} km de la destination")])
+                for p in r["pois"] if p["type"] in POI_PAR_CATEGORIE.get(categorie, POI_PAR_CATEGORIE["tous"])]
+    cercle = [dl.Circle(center=[dest["lat"], dest["lon"]], radius=RAYON_POI_KM * 1000, color="#555555", weight=2, fillOpacity=0.05)]
+    return lignes, cercle, reperes
+
+def _message(texte, niveau="muted"):
+    return html.Div(texte, className=f"text-{niveau}")
+
 
 @app.callback(
     [Output("kpi-distance", "children"), Output("kpi-intermodal", "children"), Output("kpi-statut", "children"),
-     Output("map-lines", "children"), Output("map-isochrones", "children"), Output("map-markers", "children"), Output("map", "viewport")],
+     Output("kpi-distance-detail", "children"), Output("kpi-intermodal-detail", "children"),
+     Output("store-resultat", "data"), Output("store-selection", "data"), Output("sens", "value"), Output("store-horloge", "data")],
     Input("btn-search", "n_clicks"),
-    [State("input-depart", "value"), State("input-arrivee", "value")],
+    [State("input-depart", "value"), State("input-arrivee", "value"),
+     State("date-picker-aller", "date"), State("time-picker-aller", "value"),
+     State("switch-ar", "value"), State("date-picker-retour", "date"), State("time-picker-retour", "value")],
+    running=[(Output("btn-search", "disabled"), True, False)],
     prevent_initial_call=True
 )
-def update_map(n_clicks, depart, arrivee):
-    if not depart or not arrivee: 
-        return "-- km", "--", "--", [], [], [], dash.no_update
+def lancer_recherche(n_clicks, depart, arrivee, date_aller, heure_aller, aller_retour, date_retour, heure_retour):
+    """Interroge la base et l'API SNCF, puis range le résultat dans store-resultat : l'affichage (trajets, carte) s'en sert sans rappeler l'API."""
+    vide = ("-- km", "--", "--", "", "")
+    reset = ({"sens": "aller", "index": 0}, "aller", {"mode": "reel"})
+    if not depart or not arrivee:
+        return (*vide, {"message": "Choisissez une gare de départ et une destination.", "niveau": "muted"}, *reset)
     try:
-        df = pd.read_sql(f"SELECT nom, lat, lon, distance_gare_km FROM lieu WHERE nom IN ('{depart}', '{arrivee}')", engine)
-        pt_dep = df[df['nom'] == depart].iloc[0]
-        pt_arr = df[df['nom'] == arrivee].iloc[0]
-        
-        dist = pt_arr['distance_gare_km'] if not pd.isna(pt_arr['distance_gare_km']) else np.sqrt((pt_dep['lat']-pt_arr['lat'])**2 + (pt_dep['lon']-pt_arr['lon'])**2) * 111 
-        reco = "Marche à pied" if dist <= 1.5 else "Vélo / Bus" if dist <= 5.0 else "Voiture / Taxi"
-        
-        bounds = [[min(pt_dep['lat'], pt_arr['lat']), min(pt_dep['lon'], pt_arr['lon'])], [max(pt_dep['lat'], pt_arr['lat']), max(pt_dep['lon'], pt_arr['lon'])]]
-        
-        return (f"{dist:.1f} km", reco, "Faisable" if dist <= 5 else "Difficile",
-                [dl.Polyline(positions=[[pt_dep['lat'], pt_dep['lon']], [pt_arr['lat'], pt_arr['lon']]], color=CARMILLON, weight=4)],
-                [dl.Circle(center=[pt_arr['lat'], pt_arr['lon']], radius=5000, color=COLORBLIND_PALETTE[3], fillOpacity=0.2)],
-                [dl.Marker(position=[pt_dep['lat'], pt_dep['lon']], children=[dl.Tooltip(f"Départ: {depart}")]), dl.Marker(position=[pt_arr['lat'], pt_arr['lon']], children=[dl.Tooltip(f"Destination: {arrivee}")])],
-                dict(bounds=bounds, transition="flyTo"))
+        quand = quand_depuis(date_aller, heure_aller) if date_aller else None
+        retour = quand_depuis(date_retour, heure_retour) if aller_retour and 1 in aller_retour and date_retour else None
+        r = rechercher(depart, arrivee, quand=quand, retour=retour, engine=engine)
+    except Exception as erreur:
+        return (*vide, {"message": f"Recherche impossible : {type(erreur).__name__}", "niveau": "danger"}, *reset)
+    if r is None:
+        return (*vide, {"message": "Lieu introuvable en base.", "niveau": "danger"}, *reset)
+
+    mode, detail_mode = r["dernier_km"]
+    km, gare = r["distance_km"], r["gare_arrivee"]
+    statut = "--" if r["faisable"] is None else "Faisable" if r["faisable"] else "Difficile"
+    r["pois"] = r["pois"].to_dict("records")
+    donnees = json.loads(json.dumps(r, default=str))          # datetimes → texte : le résultat voyage dans un dcc.Store
+    return (f"{km:.1f} km" if km is not None else "-- km", mode, statut, f"depuis {gare['nom']}" if gare else "", detail_mode, donnees, *reset)
+
+
+@app.callback(
+    [Output("store-selection", "data", allow_duplicate=True), Output("store-horloge", "data", allow_duplicate=True)],
+    [Input({"type": "option", "index": ALL}, "n_clicks"), Input("sens", "value")],
+    State("store-selection", "data"),
+    prevent_initial_call=True
+)
+def choisir_option(clics, sens, selection):
+    """Un clic sur un bloc choisit cette option ; Aller / Retour repart sur la première option."""
+    declencheur = ctx.triggered_id
+    if declencheur == "sens":
+        if sens == selection["sens"]:
+            raise PreventUpdate
+        return {"sens": sens, "index": 0}, {"mode": "reel"}
+    if isinstance(declencheur, dict) and ctx.triggered[0]["value"]:        # n_clicks vide = bloc qui vient d'apparaître, pas un clic
+        return {"sens": selection["sens"], "index": declencheur["index"]}, {"mode": "reel"}
+    raise PreventUpdate
+
+
+@app.callback(
+    [Output("options-trajets", "children"), Output("results-title", "children"), Output("poi-legend", "children"), Output("col-sens", "style"),
+     Output("kpi-statut-detail", "children"),
+     Output("map-lines", "children"), Output("map-isochrones", "children"), Output("map-markers", "children"), Output("map", "viewport"),
+     Output("store-etapes", "data"), Output("store-pas", "data")],
+    [Input("store-resultat", "data"), Input("store-selection", "data"), Input("filter-categorie", "value")]
+)
+def afficher_resultat(r, selection, categorie):
+    """Blocs des options et carte, d'après le résultat de la recherche et l'option choisie."""
+    if not r:
+        raise PreventUpdate
+    nouveau = "store-resultat.data" in ctx.triggered_prop_ids
+    cache, visible = {"display": "none"}, {"display": "block"}
+    if "message" in r:
+        return _message(r["message"], r["niveau"]), "Trajets proposés", [], cache, "", [], [], [], dash.no_update, None, []
+
+    dep, gare = r["depart"], r["gare_arrivee"]
+    retour = selection["sens"] == "retour" and bool(r["trajets_retour"])
+    trajets = r["trajets_retour"] if retour else r["trajets"]
+    index = min(selection["index"], max(len(trajets) - 1, 0))
+    de, vers = (gare, dep) if retour else (dep, gare)
+    titre = f"{'Retour' if retour else 'Aller'} · {de['nom']} → {vers['nom']}" if gare else "Trajets proposés"
+    liaison = ((de["lon"], de["lat"]), (vers["lon"], vers["lat"])) if gare else ((dep["lon"], dep["lat"]),) * 2
+
+    traces_options = [tracer_trajet(t, reseau_ferre, *liaison) for t in trajets]
+    traces = traces_options[index] if trajets else tracer_trajet(None, reseau_ferre, *liaison)
+    if r["erreur_api"]:
+        blocs = _message(f"Horaires indisponibles ({r['erreur_api']}). La liaison directe entre les gares est tracée.", "warning")
+    elif gare is None:
+        blocs = _message("Aucune gare d'arrivée connue pour ce lieu.", "warning")
+    elif r["meme_gare"]:
+        blocs = _message(f"La gare la plus proche de cette destination est la gare de départ ({gare['nom']}) : aucun train à prendre.", "info")
+    elif r["periode_invalide"]:
+        blocs = _message(r["periode_invalide"], "warning")
+    elif not trajets:
+        blocs = _message("Aucun train trouvé pour ce créneau.", "warning")
+    else:
+        etiquettes = etiquettes_trajets(trajets)
+        blocs = html.Div([_carte_option(i, t, i == index, traces_options[i], etiquettes[i]) for i, t in enumerate(trajets)],
+                         style={"display": "flex", "flexDirection": "column", "gap": "8px"})
+
+    co2 = trajets[index].get("co2_g") if trajets else None
+    detail_statut = f"Train : {co2 / 1000:.1f} kg CO₂e par voyageur" if co2 else ("Horaires indisponibles" if r["erreur_api"] else "")
+    lignes, cercle, reperes = _calques(r, traces, categorie)
+    viewport = dash.no_update
+    if nouveau:
+        points = [p for t in traces for p in t["points"]] + [[r["destination"]["lat"], r["destination"]["lon"]]]
+        viewport = dict(bounds=[[min(p[0] for p in points), min(p[1] for p in points)], [max(p[0] for p in points), max(p[1] for p in points)]], transition="flyTo")
+    for t in traces:                                    # ce dont le navigateur a besoin pour dessiner le train (image, taille réelle)
+        t.update(sprites.infos(t["style"]["cle"], t["libelle"]))
+    pas = [t["points"] for t in traces if t["marche"]]  # trajets à pied, dessinés en empreintes de pas
+    if gare and r["dernier_km"][0] == "Marche à pied":
+        pas.append([[gare["lat"], gare["lon"]], [r["destination"]["lat"], r["destination"]["lon"]]])
+    return (blocs, titre, [], visible if r["trajets_retour"] else cache, detail_statut,
+            lignes, cercle, reperes, viewport, traces, pas)
+
+@app.callback(
+    Output("store-horloge", "data", allow_duplicate=True),
+    Input("btn-sim", "n_clicks"),
+    State("store-horloge", "data"),
+    prevent_initial_call=True
+)
+def basculer_simulation(clics, horloge):
+    """Par défaut le suivi est en temps réel. « Simuler le trajet » le fait défiler depuis son départ à vitesse accélérée ; le même bouton arrête la simulation."""
+    if horloge and horloge.get("mode") == "sim":
+        return {"mode": "reel"}
+    return {"mode": "sim", "t0_reel": time.time()}
+
+
+@app.callback(
+    [Output("panneau-resultats", "style"), Output("btn-ouvrir", "style")],
+    [Input("btn-fermer", "n_clicks"), Input("btn-ouvrir", "n_clicks"), Input("store-resultat", "data")],
+    prevent_initial_call=True
+)
+def ouvrir_ou_fermer_les_trajets(fermer, ouvrir, resultat):
+    """Le panneau des trajets s'ouvre à chaque recherche ; la croix le masque et « Afficher les trajets » le rouvre."""
+    if ctx.triggered_id == "store-resultat" and not resultat:
+        raise PreventUpdate
+    ouvert = ctx.triggered_id != "btn-fermer"
+    return {**STYLE_PANNEAU, "display": "block" if ouvert else "none"}, {**STYLE_OUVRIR, "display": "none" if ouvert else "block"}
+
+
+@app.callback(
+    [Output("suivi-etat", "children"), Output("btn-sim", "active"), Output("btn-sim", "children")],
+    [Input("tick", "n_intervals"), Input("store-etapes", "data"), Input("store-horloge", "data")]
+)
+def etat_du_suivi(_, etapes, horloge):
+    """Texte d'état (où en est le train) chaque seconde ; les trains eux-mêmes sont animés dans le navigateur (src/assets/trains.js)."""
+    simulation = bool(horloge) and horloge.get("mode") == "sim"
+    bouton = [html.I(className="fa-solid fa-stop me-2"), "Arrêter la simulation"] if simulation else [html.I(className="fa-solid fa-play me-2"), "Simuler le trajet"]
+    if not etapes:
+        return "", simulation, bouton
+    maintenant = datetime.now()
+    if simulation:
+        departs = [datetime.fromisoformat(e["depart"]) for e in etapes if e.get("depart") and not e["marche"]]
+        if departs:
+            maintenant = suivi.horloge_simulee(min(departs), datetime.fromtimestamp(horloge["t0_reel"]), maintenant)
+    etat = suivi.suivre(etapes, maintenant)
+    entete = f"Simulation · {maintenant:%d/%m %H:%M} — " if simulation else f"Temps réel · {maintenant:%H:%M} — "
+    return entete + etat["message"], simulation, bouton
+
+
+@app.callback(
+    [Output("store-tous", "data"), Output("btn-tous", "active"), Output("btn-tous-texte", "children")],
+    [Input("btn-tous", "n_clicks"), Input("tick-tous", "n_intervals")],
+    State("store-tous", "data"),
+    running=[(Output("btn-tous", "disabled"), True, False)],
+    prevent_initial_call=True
+)
+def trains_du_reseau(clics, _, actuel):
+    """Bouton du bandeau : affiche (ou cache) tous les trains qui roulent sur le réseau, d'après les horaires théoriques. Rafraîchi toutes les 2 minutes."""
+    actif = bool(actuel and actuel.get("actif"))
+    if ctx.triggered_id == "btn-tous":
+        actif = not actif
+    elif not actif:
+        raise PreventUpdate                       # le rafraîchissement ne fait rien tant que le bouton est éteint
+    if not actif:
+        return {"actif": False, "trains": []}, False, "Tous les trains en direct"
+    try:
+        trains = circulations.en_cours(datetime.now(), engine)
     except Exception:
-        return "Inconnu", "Voiture", "Données manquantes", [], [], [], dash.no_update
+        return {"actif": False, "trains": []}, False, "Tous les trains en direct (indisponible)"
+    return {"actif": True, "trains": trains}, True, f"{len(trains)} trains en circulation"
+
+
+# Animation des trains dans le navigateur (src/assets/trains.js) : fluide, à l'échelle de la carte, clic pour suivre un train.
+app.clientside_callback(
+    ClientsideFunction(namespace="trains", function_name="configurer"),
+    Output("store-js", "data"),
+    [Input("store-etapes", "data"), Input("store-horloge", "data")]
+)
+
+
+app.clientside_callback(
+    ClientsideFunction(namespace="trains", function_name="recentrer"),
+    Output("store-js-centre", "data"),
+    Input("btn-centrer", "n_clicks"),
+    prevent_initial_call=True
+)
+
+app.clientside_callback(
+    ClientsideFunction(namespace="trains", function_name="configurerPas"),
+    Output("store-js-pas", "data"),
+    Input("store-pas", "data")
+)
+
+app.clientside_callback(
+    ClientsideFunction(namespace="trains", function_name="configurerTous"),
+    Output("store-js-tous", "data"),
+    Input("store-tous", "data")
+)
+
+
+@app.server.route("/sprite-train/<cle>.png")
+def sprite_train(cle):
+    """Image d'un train, recadrée en mémoire à partir de assets/train/ (voir lib/sprites.py)."""
+    png = sprites.sprite_png(cle) if cle in sprites.IMAGES else None
+    if png is None:
+        abort(404)
+    return Response(png, mimetype="image/png", headers={"Cache-Control": "public, max-age=86400"})
+
 
 if __name__ == "__main__":
     app.run(debug=True)

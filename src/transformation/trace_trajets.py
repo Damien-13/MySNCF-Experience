@@ -13,7 +13,6 @@ Méthode :
 Les distances sont calculées sur une projection plane (équirectangulaire à 46,5° de latitude) : suffisant pour la France continentale.
 """
 import json
-import math
 import sys
 from pathlib import Path
 
@@ -24,70 +23,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import numpy as np
 import pandas as pd
 import sqlalchemy as sa
-from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import dijkstra
-from scipy.spatial import cKDTree
 
 from lib.db.connection import get_engine
 from lib.db.models import TraceTrajet, TronconVoie
-from voies import DECIMALES, longueur_km
+from lib.reseau_ferre import (TYPES_HORS_RAIL, RAPPORT_MAX, RAYON_ACCROCHAGE_KM, RAYON_JONCTION_KM, MARGE_RECHERCHE_KM,  # noqa: F401 (réexportés)
+                              construire_reseau, en_km, geometrie, longueur_km, suivre)
 
-TYPES_HORS_RAIL = ("Car TER", "Car à réservation", "Car de remplacement", "Navette")
-RAYON_JONCTION_KM = 0.5
-RAYON_ACCROCHAGE_KM = 1.0
-RAPPORT_MAX = 3.0
-MARGE_RECHERCHE_KM = 2.0
-KM_PAR_DEGRE_LAT = 110.57
-KM_PAR_DEGRE_LON = 111.32 * math.cos(math.radians(46.5))
 CHUNK_SIZE = 5_000
-
-
-def _en_km(lonlat):
-    lonlat = np.asarray(lonlat, dtype=float)
-    return np.column_stack([lonlat[:, 0] * KM_PAR_DEGRE_LON, lonlat[:, 1] * KM_PAR_DEGRE_LAT])
-
-
-def construire_reseau(geometries):
-    """Réseau des voies depuis des polylignes [[lon, lat], …] : (points lon/lat, arbre des points en km, graphe creux des distances en km)."""
-    points, aretes, troncon = [], [], []
-    for numero, ligne in enumerate(geometries):
-        debut = len(points)
-        points.extend(ligne)
-        troncon.extend([numero] * len(ligne))
-        aretes.extend((debut + k - 1, debut + k) for k in range(1, len(ligne)))
-    points = np.array(points, dtype=float)
-    xy, troncon = _en_km(points), np.array(troncon)
-    arbre = cKDTree(xy)
-    bouts = np.flatnonzero((np.r_[True, troncon[1:] != troncon[:-1]]) | (np.r_[troncon[1:] != troncon[:-1], True]))
-    for a, voisins in zip(bouts, arbre.query_ball_point(xy[bouts], RAYON_JONCTION_KM)):
-        aretes.extend((a, b) for b in voisins if troncon[a] != troncon[b])
-    aretes = np.array(aretes)
-    poids = np.linalg.norm(xy[aretes[:, 0]] - xy[aretes[:, 1]], axis=1)
-    n = len(points)
-    graphe = coo_matrix((np.r_[poids, poids], (np.r_[aretes[:, 0], aretes[:, 1]], np.r_[aretes[:, 1], aretes[:, 0]])), shape=(n, n)).tocsr()
-    return points, arbre, graphe
-
-
-def _geometrie(points):
-    """Points arrondis, sans doublon consécutif."""
-    out = []
-    for lon, lat in points:
-        p = [round(float(lon), DECIMALES), round(float(lat), DECIMALES)]
-        if not out or out[-1] != p:
-            out.append(p)
-    return out
 
 
 def tracer(points, arbre, graphe, arrets, paires):
     """Une ligne par paire : arret_depart_id, arret_arrivee_id, geometrie (JSON), longueur_km, sur_voie.
     `arrets` : DataFrame indexé par id d'arrêt avec lon et lat ; `paires` : DataFrame depart, arrivee."""
     lonlat = arrets[["lon", "lat"]].to_numpy()
-    distance, noeud = arbre.query(_en_km(lonlat))
+    distance, noeud = arbre.query(en_km(lonlat))
     position = {a: k for k, a in enumerate(arrets.index)}
-    xy = _en_km(lonlat)
+    xy = en_km(lonlat)
 
     def droite(a, b):
-        ligne = _geometrie([lonlat[position[a]], lonlat[position[b]]])
+        ligne = geometrie([lonlat[position[a]], lonlat[position[b]]])
         return {"arret_depart_id": a, "arret_arrivee_id": b, "geometrie": json.dumps(ligne, separators=(",", ":")),
                 "longueur_km": round(longueur_km(ligne), 3), "sur_voie": False}
 
@@ -103,13 +58,10 @@ def tracer(points, arbre, graphe, arrets, paires):
         dist, pred = dijkstra(graphe, indices=int(source), limit=max(droites) * RAPPORT_MAX + MARGE_RECHERCHE_KM, return_predecessors=True)
         for (a, b), ligne_droite in zip(a_chercher, droites):
             fin = int(noeud[position[b]])
-            if not np.isfinite(dist[fin]) or dist[fin] > RAPPORT_MAX * max(ligne_droite, 1.0):
+            ligne = suivre(points, dist, pred, source, fin, lonlat[position[a]], lonlat[position[b]], ligne_droite)
+            if ligne is None:
                 resultat.append(droite(a, b))
                 continue
-            chemin = [fin]
-            while chemin[-1] != source:
-                chemin.append(int(pred[chemin[-1]]))
-            ligne = _geometrie([lonlat[position[a]], *points[chemin[::-1]], lonlat[position[b]]])
             resultat.append({"arret_depart_id": a, "arret_arrivee_id": b, "geometrie": json.dumps(ligne, separators=(",", ":")),
                              "longueur_km": round(longueur_km(ligne), 3), "sur_voie": True})
     return resultat
@@ -120,11 +72,11 @@ def lire_paires(engine):
     arrets = pd.read_sql(sa.text(
         "SELECT a.id, lieu.lon, lieu.lat FROM arret a JOIN lieu ON lieu.id = a.lieu_id JOIN reseau r ON r.id = a.reseau_id "
         "WHERE r.mode = 'train' AND lieu.lon IS NOT NULL AND lieu.lat IS NOT NULL"), engine).set_index("id")
+    # On part des lignes de train (index sur reseau_id) : partir de passage obligerait SQLite à parcourir toute la table (des dizaines de millions de lignes).
     paires = pd.read_sql(sa.text(
-        "SELECT DISTINCT p1.arret_id AS depart, p2.arret_id AS arrivee FROM passage p1 "
-        "JOIN passage p2 ON p2.circulation_id = p1.circulation_id AND p2.ordre = p1.ordre + 1 "
-        "JOIN circulation c ON c.id = p1.circulation_id JOIN ligne l ON l.id = c.ligne_id JOIN reseau r ON r.id = l.reseau_id "
-        "WHERE r.mode = 'train' AND (l.type_transport IS NULL OR l.type_transport NOT IN :types)").bindparams(
+        "SELECT DISTINCT p1.arret_id AS depart, p2.arret_id AS arrivee FROM ligne l JOIN circulation c ON c.ligne_id = l.id "
+        "JOIN passage p1 ON p1.circulation_id = c.id JOIN passage p2 ON p2.circulation_id = p1.circulation_id AND p2.ordre = p1.ordre + 1 "
+        "WHERE l.reseau_id IN (SELECT id FROM reseau WHERE mode = 'train') AND (l.type_transport IS NULL OR l.type_transport NOT IN :types)").bindparams(
         sa.bindparam("types", expanding=True)), engine, params={"types": list(TYPES_HORS_RAIL)})
     return arrets, paires[paires["depart"].isin(arrets.index) & paires["arrivee"].isin(arrets.index)].reset_index(drop=True)
 

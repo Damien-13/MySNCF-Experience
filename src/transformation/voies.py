@@ -15,7 +15,6 @@ Nettoyage :
 - Les points sont simplifiés (TOLERANCE_DEG, environ 5 m) puis arrondis à 5 décimales (environ 1 m) pour alléger la base.
 """
 import json
-import math
 import sys
 from pathlib import Path
 
@@ -28,13 +27,13 @@ from shapely.geometry import LineString
 
 from lib.db.connection import get_engine
 from lib.db.models import TronconVoie
+from lib.reseau_ferre import DECIMALES, longueur_km
 
 DOSSIER_VOIES = ROOT / "data" / "formes_voies_rfn"
 DOSSIER_LIGNES = ROOT / "data" / "formes_lignes_rfn"
 TYPES_VOIE_GARDES = {"VPL", "VPA"}
 MNEMO_LIGNE_EXPLOITEE = "EXPLOITE"
 TOLERANCE_DEG = 0.00005
-DECIMALES = 5
 CHUNK_SIZE = 5_000
 
 
@@ -48,16 +47,6 @@ def lire(dossier):
             parties = [forme.points[debuts[i]:debuts[i + 1]] for i in range(len(forme.parts))]
             entites.append({"attributs": enregistrement.as_dict(), "parties": parties})
     return entites
-
-
-def longueur_km(points):
-    """Longueur d'une polyligne [(lon, lat), …] en kilomètres (haversine)."""
-    total = 0.0
-    for (lon1, lat1), (lon2, lat2) in zip(points, points[1:]):
-        p1, p2 = math.radians(lat1), math.radians(lat2)
-        a = math.sin((p2 - p1) / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(math.radians(lon2 - lon1) / 2) ** 2
-        total += 2 * 6371.0088 * math.asin(math.sqrt(a))
-    return total
 
 
 def _simplifier(points):
