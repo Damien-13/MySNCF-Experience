@@ -124,6 +124,16 @@ def test_tracer_trajet_marche_et_dernier_km():
     assert {itineraire.style_dernier_km(m)["tirets"] for m in ("Marche à pied", "Vélo / Bus", "Voiture / Taxi")} == {"1 9", "10 7", "18 8"}
 
 
+def test_car_passe_par_ses_arrets_sans_suivre_les_rails():
+    reseau = construire_reseau(VOIE)
+    car = {"type": "public_transport", "mode": "train", "mode_physique": "Autocar", "ligne": "TER", "numero": "99", "duree_s": 1800, "de_lonlat": (2.0, 48.0),
+           "vers_lonlat": (2.2, 48.0), "arrets_lonlat": [(2.0, 48.0), (2.05, 48.02), (2.2, 48.0)]}
+    etapes = itineraire.tracer_trajet({"sections": [car]}, reseau, (2.0, 48.0), (2.2, 48.0))
+    assert etapes[0]["points"] == [[48.0, 2.0], [48.02, 2.05], [48.0, 2.2]] and etapes[0]["style"]["cle"] == "bus" and not etapes[0]["sur_voie"]
+    car["arrets_lonlat"] = []                                                                     # sans liste d'arrêts : droit de départ à arrivée
+    assert itineraire.tracer_trajet({"sections": [car]}, reseau, (2.0, 48.0), (2.2, 48.0))[0]["points"] == [[48.0, 2.0], [48.0, 2.2]]
+
+
 def test_filtre_culture_ne_garde_que_la_culture(engine):
     assert set(itineraire.pois_autour(engine, 48.009, 2.2, "culture")["type"]) == {"culture"}
     assert {o["value"] for o in itineraire.chercher_destinations("", "culture", engine, limite=100)} == {10, 12}
@@ -146,6 +156,12 @@ def test_rechercher_sans_retour_ni_api(engine, monkeypatch):
     r = itineraire.rechercher(1, 12, engine=engine)
     assert r["erreur_api"] == "API SNCF injoignable (ConnectionError)" and r["trajets"] == [] and r["trajets_retour"] == []
     assert r["distance_km"] == 22.0 and r["faisable"] is False and r["dernier_km"][0] == "Voiture / Taxi"     # les KPI restent calculés sans l'API
+
+
+def test_rechercher_meme_gare_ne_appelle_pas_l_api(engine, monkeypatch):
+    monkeypatch.setattr(navitia, "itineraires", lambda *a, **k: pytest.fail("l'API ne doit pas être appelée"))
+    r = itineraire.rechercher(2, 10, engine=engine)                    # le château est à côté de la gare B, qui est aussi le départ
+    assert r["meme_gare"] and r["trajets"] == [] and r["distance_km"] == 1.0
 
 
 def test_rechercher_lieu_inconnu(engine):

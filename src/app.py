@@ -465,9 +465,11 @@ def _legende_poi(categorie):
             for t in POI_PAR_CATEGORIE.get(categorie, POI_PAR_CATEGORIE["tous"])]
 
 def _trait(points, style, epaisseur):
-    """Un trait de la carte : liseré blanc dessous, puis la couleur et le motif du service (petits points à pied, tirets en bus ou en vélo…)."""
-    return [dl.Polyline(positions=points, color="white", weight=epaisseur + 4, opacity=0.9),
-            dl.Polyline(positions=points, color=style["couleur"], weight=epaisseur, dashArray=style["tirets"], lineCap="round" if style["cle"] in ("rer", "bus", "pied") else "butt")]
+    """Un trait de la carte : liseré blanc dessous (sauf pour les points, où il formerait un trait plein), puis la couleur et le motif du service."""
+    pointille = style["cle"] in ("bus", "pied")
+    trait = dl.Polyline(positions=points, color=style["couleur"], weight=epaisseur + 1 if pointille else epaisseur, dashArray=style["tirets"],
+                        lineCap="round" if style["cle"] in ("rer", "bus", "pied") else "butt")
+    return [trait] if pointille else [dl.Polyline(positions=points, color="white", weight=epaisseur + 4, opacity=0.9), trait]
 
 def _calques(r, traces, categorie):
     """(lignes, cercle, repères) de la carte : un trait par train (liseré blanc dessous), dernier kilomètre en pointillés, lieux de la catégorie autour de la destination."""
@@ -572,6 +574,8 @@ def afficher_resultat(r, selection, categorie):
         blocs = _message(f"Horaires indisponibles ({r['erreur_api']}). La liaison directe entre les gares est tracée.", "warning")
     elif gare is None:
         blocs = _message("Aucune gare d'arrivée connue pour ce lieu.", "warning")
+    elif r["meme_gare"]:
+        blocs = _message(f"La gare la plus proche de cette destination est la gare de départ ({gare['nom']}) : aucun train à prendre.", "info")
     elif not trajets:
         blocs = _message("Aucun train trouvé à cette date (l'API couvre environ 30 jours).", "warning")
     else:

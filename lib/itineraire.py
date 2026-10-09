@@ -9,7 +9,7 @@ Usage :
 
 rechercher() retourne un dict (None si un lieu est inconnu) : depart, destination, gare_arrivee, distance_km (destination → gare la plus proche),
 alentours (stations vélo et arrêts de bus près de la gare d'arrivée), dernier_km (mode, détail), faisable, trajets (aller, Navitia, jusqu'à 3),
-trajets_retour (idem pour le retour, vide sans date de retour), erreur_api (texte, sinon None), pois (lieux de toutes les catégories autour de la destination : le dashboard filtre à l'affichage).
+trajets_retour (idem pour le retour, vide sans date de retour), meme_gare (la gare d'arrivée est celle du départ : pas de train), erreur_api (texte, sinon None), pois (lieux de toutes les catégories autour de la destination : le dashboard filtre à l'affichage).
 tracer_trajet() dessine un trajet : un tracé collé aux voies par train, avec la couleur et les tirets du service (style_ligne).
 Rien n'est stocké : l'API Navitia est appelée à chaque recherche (voir lib/navitia.py).
 """
@@ -127,7 +127,7 @@ STYLES = {
     "ter": ("TER / régional", "#0072b2", "6 6"),
     "intercites": ("Intercités", "#2e7d32", "14 6 2 6"),
     "rer": ("RER / Transilien", "#00a3a1", "3 5"),
-    "bus": ("Car / bus", "#e69f00", "2 12"),
+    "bus": ("Car / bus", "#d55e00", "1 11"),
     "eurostar": ("Eurostar", "#00205b", "16 5 2 5 2 5"),
     "trenitalia": ("Trenitalia", "#d1232a", "16 5 2 5 2 5"),
     "renfe": ("Renfe AVE", "#7b3294", "16 5 2 5 2 5"),
@@ -179,7 +179,8 @@ def style_dernier_km(mode):
 
 def tracer_trajet(trajet, reseau, depart, arrivee):
     """Un dict par étape du trajet, dans l'ordre : points [[lat, lon], …], sur_voie, style (style_ligne), libelle (« TER 880693 »), marche (vrai à pied).
-    Les trains et les cars sont collés aux voies ; une correspondance à pied est un trait droit en petits points.
+    Les trains sont collés aux voies ; un car passe par la suite de ses arrêts (droit d'un arrêt au suivant, sans suivre la route) ;
+    une correspondance à pied est un trait droit en petits points.
     `depart`, `arrivee` : (lon, lat) des gares, utilisées sans train pour tracer la liaison directe."""
     etapes = []
     for s in (trajet or {}).get("sections", []):
@@ -187,8 +188,12 @@ def tracer_trajet(trajet, reseau, depart, arrivee):
             continue
         de, vers = tuple(s["de_lonlat"]), tuple(s["vers_lonlat"])
         if s["type"] == "public_transport":
-            points, ok = chemin(reseau, de, vers)
-            etapes.append({"points": [[lat, lon] for lon, lat in points], "sur_voie": ok, "style": style_ligne(s), "marche": False,
+            style = style_ligne(s)
+            if style["cle"] == "bus":            # un car ne roule pas sur les rails : on passe par chacun de ses arrêts
+                points, ok = [tuple(a) for a in (s.get("arrets_lonlat") or [de, vers])], False
+            else:
+                points, ok = chemin(reseau, de, vers)
+            etapes.append({"points": [[lat, lon] for lon, lat in points], "sur_voie": ok, "style": style, "marche": False,
                            "libelle": f"{s.get('ligne') or 'Train'} {s.get('numero') or ''}".strip()})
         elif s["type"] in ("transfer", "street_network", "crow_fly") and s.get("mode") == "walking" and s["duree_s"] >= 60 and de != vers:
             etapes.append({"points": [[de[1], de[0]], [vers[1], vers[0]]], "sur_voie": False, "style": style_dernier_km("Marche à pied"), "marche": True,
@@ -210,9 +215,9 @@ def rechercher(depart_id, destination_id, quand=None, retour=None, engine=None):
     proches = alentours(engine, gare["lat"], gare["lon"]) if gare else {"velo": 0, "bus": 0}
     resultat = {"depart": depart, "destination": destination, "gare_arrivee": gare, "distance_km": distance, "alentours": proches,
                 "dernier_km": dernier_km(distance, proches), "faisable": None if distance is None else distance <= SEUIL_VELO_BUS_KM,
-                "trajets": [], "trajets_retour": [], "erreur_api": None,
+                "trajets": [], "trajets_retour": [], "erreur_api": None, "meme_gare": gare is not None and gare["id"] == depart["id"],
                 "pois": pois_autour(engine, destination["lat"], destination["lon"], "tous")}
-    if gare is None or not depart["code_uic"] or not gare["code_uic"]:
+    if gare is None or resultat["meme_gare"] or not depart["code_uic"] or not gare["code_uic"]:
         return resultat
     try:
         resultat["trajets"] = navitia.itineraires(navitia.id_gare(depart["code_uic"]), navitia.id_gare(gare["code_uic"]), quand=quand, nombre=MAX_TRAJETS)
