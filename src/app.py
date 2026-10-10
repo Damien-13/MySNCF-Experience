@@ -810,6 +810,13 @@ app.clientside_callback(
     Input("tabs-navigation", "active_tab")
 )
 
+# Au chargement, l'interrupteur de thème se règle sur le mode clair / sombre du système (src/assets/trains.js).
+app.clientside_callback(
+    ClientsideFunction(namespace="trains", function_name="themeSysteme"),
+    Output("theme-switch", "value"),
+    Input("theme-switch", "id")
+)
+
 @app.callback(
     Output("modal-plan-action", "is_open"),
     [Input("btn-open-modal", "n_clicks"), Input("btn-close-modal", "n_clicks")],

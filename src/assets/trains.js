@@ -395,6 +395,11 @@
         if (S.horloge.mode === "sim") setTimeout(recentrer, 150);   // simulation lancée : comme un clic sur le train
         return Date.now();
       },
+      /** Au chargement : le thème suit le réglage clair / sombre du système (navigateur) ; l'interrupteur reste utilisable ensuite. */
+      themeSysteme: function (_) {
+        const sombre = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+        return sombre ? ["dark"] : [];
+      },
       /** Au chargement : on retrouve la carte (même dans l'onglet caché) pour brancher le recalcul de sa taille (voir trouverCarte). */
       afficherOnglet: function (onglet) {
         let essais = 0;
