@@ -31,3 +31,8 @@
   background-color: #c71556 !important; border-color: #c71556 !important; color: #fff !important; font-weight: 700;
 }
 #sens .btn:not(.active), #btn-reel:not(.active), #btn-sim:not(.active) { background-color: transparent; }
+
+/* Thème sombre : mêmes tuiles OpenStreetMap que le thème clair, assombries par un filtre (pas de fond de carte tiers à clé d'API) */
+.carte-sombre .leaflet-tile-pane {
+    filter: invert(1) hue-rotate(180deg) brightness(0.9) contrast(0.9) saturate(0.7);
+}
