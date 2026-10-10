@@ -52,3 +52,8 @@
     --Dash-Text-Weak: rgba(255, 255, 255, 0.65);
     --Dash-Text-Disabled: rgba(255, 255, 255, 0.45);
 }
+
+/* Thème sombre : textes secondaires (Bootstrap les met en gris foncé) et boutons contour « dark » */
+.theme-sombre .text-muted { color: #aab3c2 !important; }
+.theme-sombre .btn-outline-dark { color: #f1f1f1; border-color: rgba(255, 255, 255, 0.6); }
+.theme-sombre .btn-outline-dark:hover { color: #11151c; background-color: #f1f1f1; border-color: #f1f1f1; }
