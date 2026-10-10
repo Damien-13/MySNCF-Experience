@@ -4,10 +4,12 @@ Les numéros de ligne de l'API SNCF (« 89047 ») ne sont pas ceux d'OpenStreetM
 Une ligne convient si elle passe à moins de RAYON_M de chaque arrêt.
 Le tracé relie, deux par deux, les points de la ligne les plus proches des arrêts, par le plus court chemin sur la ligne (les morceaux d'une ligne ne sont pas
 tous bout à bout dans OpenStreetMap : on les relie par leurs extrémités communes). Un tronçon qui fait un détour énorme écarte la ligne. Parmi les lignes qui conviennent, on garde celle qui colle le mieux aux arrêts, puis la plus courte.
+Quand aucune ligne ne convient (ligne absente d'OpenStreetMap, ou en morceaux), le car est tracé arrêt par arrêt sur les routes, comme un GPS (lib/reseau_routier.py) ;
+sans route non plus (hors de France), les arrêts sont reliés en ligne droite.
 Les calculs se font sur une projection plane (équirectangulaire à 46,5° de latitude), comme lib/reseau_ferre.py.
 
 Usage :
-    points, sur_route = trace_car([(lon, lat), …])    # points [(lon, lat), …] ; sur_route faux = aucune ligne trouvée, les arrêts reliés en ligne droite
+    points, sur_route = trace_car([(lon, lat), …])    # points [(lon, lat), …] ; sur_route faux = au moins un tronçon est resté en ligne droite
 """
 import json
 import math
@@ -19,6 +21,7 @@ import sqlalchemy as sa
 
 from lib.db.connection import get_engine
 from lib.reseau_ferre import DECIMALES, KM_PAR_DEGRE_LAT, KM_PAR_DEGRE_LON
+from lib.reseau_routier import chemin_par_arrets
 
 RAYON_M = 1200            # distance maximale entre un arrêt et la ligne (un arrêt peut être à l'écart de la route, sur un parking relais)
 RAPPORT_DETOUR_MAX = 4     # un tronçon de ligne plus de 4 fois plus long que la ligne droite (+ DETOUR_LIBRE_M) n'est pas le bon
@@ -103,12 +106,19 @@ def _chercher(arrets, engine):
 
 
 def trace_car(arrets, engine=None):
-    """(points [(lon, lat), …], sur_route) du car qui dessert `arrets` ([(lon, lat), …] dans l'ordre). Sans ligne trouvée : les arrêts, en ligne droite."""
+    """(points [(lon, lat), …], sur_route) du car qui dessert `arrets` ([(lon, lat), …] dans l'ordre) : sa ligne OpenStreetMap, sinon les routes arrêt par arrêt, sinon les arrêts en ligne droite."""
     arrets = tuple((float(lon), float(lat)) for lon, lat in arrets)
     if len(arrets) < 2:
         return list(arrets), False
+    engine = engine or get_engine()
     try:
-        points = _chercher(arrets, engine or get_engine())
+        points = _chercher(arrets, engine)
     except sa.exc.DatabaseError:        # table absente (base d'avant la migration 004)
         points = None
-    return (list(points), True) if points else (list(arrets), False)
+    if points:
+        return list(points), True
+    try:
+        routier = chemin_par_arrets(arrets, engine)       # ligne OpenStreetMap absente ou incomplète : on roule arrêt par arrêt sur les routes
+    except sa.exc.DatabaseError:        # table absente (base d'avant la migration 005)
+        routier = None
+    return routier if routier else (list(arrets), False)
