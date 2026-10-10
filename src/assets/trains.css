@@ -31,3 +31,24 @@
   background-color: #c71556 !important; border-color: #c71556 !important; color: #fff !important; font-weight: 700;
 }
 #sens .btn:not(.active), #btn-reel:not(.active), #btn-sim:not(.active) { background-color: transparent; }
+
+/* Thème sombre : mêmes tuiles OpenStreetMap que le thème clair, assombries par un filtre (pas de fond de carte tiers à clé d'API) */
+.carte-sombre .leaflet-tile-pane {
+    filter: invert(1) hue-rotate(180deg) brightness(0.9) contrast(0.9) saturate(0.7);
+}
+
+/* Thème sombre : les menus déroulants et le sélecteur de date (Dash 4) se règlent par variables CSS.
+   La classe est posée sur le conteneur principal ; :has() la remonte à la racine car les listes déroulantes sont rendues hors du conteneur. */
+:root:has(.theme-sombre) {
+    --Dash-Fill-Inverse-Strong: #1a202c;
+    --Dash-Fill-Interactive-Weak: rgba(255, 255, 255, 0.06);
+    --Dash-Fill-Primary-Hover: rgba(255, 255, 255, 0.08);
+    --Dash-Fill-Primary-Active: rgba(255, 255, 255, 0.14);
+    --Dash-Fill-Disabled: rgba(255, 255, 255, 0.1);
+    --Dash-Stroke-Strong: rgba(255, 255, 255, 0.45);
+    --Dash-Stroke-Weak: rgba(255, 255, 255, 0.15);
+    --Dash-Text-Primary: rgba(255, 255, 255, 0.87);
+    --Dash-Text-Strong: #ffffff;
+    --Dash-Text-Weak: rgba(255, 255, 255, 0.65);
+    --Dash-Text-Disabled: rgba(255, 255, 255, 0.45);
+}

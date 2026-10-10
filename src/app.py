@@ -154,12 +154,14 @@ THEME_COLORS = {
         "card_bg": "#ffffff", 
         "text": "#212529",
         "tiles": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "map_class": "", "root_class": "",
     },
     "dark": {
         "bg": "#11151c", 
         "card_bg": "#1a202c", 
         "text": "#f1f1f1",
-        "tiles": "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+        "tiles": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "map_class": "carte-sombre", "root_class": "theme-sombre",
     }
 }
 transition_style = {"transition": "background-color 0.4s ease, color 0.4s ease"}
@@ -896,13 +898,13 @@ def update_destinations(recherche, categorie, choisi):
         return []
 
 @app.callback(
-    [Output("main-container", "style"), Output("top-bar", "style"), Output("search-panel", "style"), Output("logo-img", "style"),
+    [Output("main-container", "style"), Output("main-container", "className"), Output("top-bar", "style"), Output("search-panel", "style"), Output("logo-img", "style"),
      Output("tab2-search-bar", "style"),
      Output("card-kpi-dist", "style"), Output("card-kpi-trans", "style"), Output("card-kpi-statut", "style"),
      Output("card-kpi-global-1", "style"), Output("card-kpi-global-2", "style"), Output("card-kpi-global-3", "style"),
      Output("card-map", "style"), Output("card-g1", "style"), Output("card-g3", "style"),
      Output("card-g4-saison", "style"),
-     Output("map-tiles", "url"),
+     Output("map-tiles", "url"), Output("card-map", "className"),
      Output("t2-kpi-couverture", "children"), Output("t2-kpi-sites", "children"), Output("t2-kpi-blanches", "children"),
      Output("graph-1", "figure"), Output("graph-3", "figure"), Output("graph-4", "figure"),
      Output("table-container", "children"),
@@ -1012,13 +1014,14 @@ def update_ui_and_graphs(theme_values, categorie, t2_clicks, table_mode, click_d
 
     return (
         {"backgroundColor": colors["bg"], "color": colors["text"], "minHeight": "100vh", "padding": "12px 20px", **transition_style},
+        colors["root_class"],
         {"backgroundColor": colors["card_bg"], "borderRadius": "12px", "color": colors["text"], **transition_style}, 
         search_panel_st, logo_st, search_bar_t2_st,
         card_iti, card_iti, card_iti,
         card_st, card_st, card_st,
         {"backgroundColor": colors["card_bg"], "color": colors["text"], "border": "none", "height": HAUTEUR_CARTE, "position": "relative", "overflow": "hidden", **transition_style},
         card_st, card_st, card_st,
-        colors["tiles"],
+        colors["tiles"], colors["map_class"],
         kpi_couv, kpi_sites, kpi_blanc,
         fig1, fig3, fig4, generate_decision_table(theme, selected_regions, mode=table_mode),
         drilldown_text, btn_reset_style, card_iti
