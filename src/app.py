@@ -77,7 +77,7 @@ from datetime import datetime, timedelta
 
 from lib.db.connection import get_engine
 from flask import Response, abort
-from lib import circulations, sprites, suivi
+from lib import circulations, lecture, sprites, suivi
 from lib.itineraire import FENETRE_API_JOURS, options_heures, retour_minimum, RAYON_POI_KM, chercher_destinations, etiquettes_trajets, options_gares, quand_depuis, rechercher, style_dernier_km, tracer_trajet
 from lib.reseau_ferre import charger_reseau
 
@@ -154,12 +154,14 @@ THEME_COLORS = {
         "card_bg": "#ffffff", 
         "text": "#212529",
         "tiles": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "map_class": "", "root_class": "",
     },
     "dark": {
         "bg": "#11151c", 
         "card_bg": "#1a202c", 
         "text": "#f1f1f1",
-        "tiles": "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+        "tiles": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "map_class": "carte-sombre", "root_class": "theme-sombre",
     }
 }
 transition_style = {"transition": "background-color 0.4s ease, color 0.4s ease"}
@@ -383,7 +385,7 @@ def generate_decision_table(theme="light", regions=None, mode="pires"):
 # ==============================================================================
 HAUTEUR_CARTE = "max(640px, calc(100vh - 240px))"      # toute la hauteur de l'écran sous les KPI, pour ne pas avoir à descendre
 # Panneau des trajets (par-dessus la carte, à droite du panneau de recherche) et bouton pour le rouvrir.
-STYLE_PANNEAU = {"position": "absolute", "top": "16px", "right": "16px", "width": "300px", "maxHeight": "calc(100% - 32px)", "overflowY": "auto", "zIndex": "1000",
+STYLE_PANNEAU = {"position": "absolute", "top": "16px", "right": "16px", "width": "325px", "maxHeight": "calc(100% - 32px)", "overflowY": "auto", "zIndex": "1000",
                  "borderRadius": "15px", "boxShadow": "0px 4px 15px rgba(0,0,0,0.3)"}
 STYLE_OUVRIR = {"position": "absolute", "top": "16px", "right": "16px", "zIndex": "1000", "backgroundColor": CARMILLON, "border": "none", "fontWeight": "bold",
                 "boxShadow": "0px 4px 15px rgba(0,0,0,0.3)"}
@@ -396,6 +398,7 @@ hours_opts = options_heures(None, None)
 def mise_en_page():
     """Reconstruite à chaque ouverture de la page : les dates par défaut sont celles du jour, pas celles du démarrage du serveur."""
     return dbc.Container(id="main-container", style={"backgroundColor": init_colors["bg"], "color": init_colors["text"], "minHeight": "100vh", "padding": "12px 20px", **transition_style}, fluid=True, children=[
+        html.A("Aller au contenu", href="#contenu", className="visually-hidden-focusable"),      # premier élément atteint au clavier : saute le bandeau
         dcc.Download(id="download-export"),
         dcc.Store(id="store-selected-dept", data=None),
         dcc.Store(id="store-resultat"),
@@ -409,6 +412,8 @@ def mise_en_page():
         dcc.Store(id="store-pas"),
         dcc.Store(id="store-js-pas"),
         dcc.Store(id="store-js-onglet"),
+        dcc.Store(id="store-js-lecture"),
+        dcc.Store(id="store-js-lecture-onglet"),
         dcc.Interval(id="tick-tous", interval=120_000),
         dcc.Interval(id="tick", interval=1000),
     
@@ -457,13 +462,21 @@ def mise_en_page():
                 width="auto"
             ),
             dbc.Col(
-                dbc.Checklist(options=[{"label": "☀️ Clair / 🌙 Sombre", "value": "dark"}], value=[], id="theme-switch", switch=True, className="fw-bold d-flex justify-content-end mb-0"),
+                html.Div([
+                    html.Button([html.I(className="fa-solid fa-volume-high me-2", **{"aria-hidden": "true"}), html.Span("Écouter", className="texte-ecouter")], id="btn-ecouter", n_clicks=0,
+                                type="button", className="btn btn-outline-secondary btn-sm fw-bold", title="Lire à voix haute le résumé de la page (trajet choisi ou indicateurs)",
+                                **{"aria-pressed": "false"}),
+                    dbc.Checklist(options=[{"label": "☀️ Clair / 🌙 Sombre", "value": "dark"}], value=[], id="theme-switch", switch=True, className="fw-bold d-flex justify-content-end mb-0"),
+                ], className="d-flex align-items-center gap-3"),
                 width="auto"
             ),
         ]),
 
+        html.Div(id="contenu", tabIndex=-1, style={"outline": "none"}),            # cible du lien « Aller au contenu »
+
         # CONTENU DE L'ONGLET 1 (ITINÉRAIRE)
-        html.Div(id="tab-1-content", style={"display": "none"}, children=[
+        html.Div(id="tab-1-content", style={"display": "none"}, role="region", **{"aria-label": "Itinéraire voyageur"}, children=[
+            html.Div(id="lecture-itineraire", children=lecture.PHRASE_ACCUEIL, className="visually-hidden", role="status", **{"aria-live": "polite", "aria-atomic": "true"}),
             dbc.Row([
                 dbc.Col(dbc.Card(id="card-kpi-dist", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "border": "none", **transition_style}, children=[dbc.CardBody([
                     html.H6("Distance Gare -> Destination", style={"opacity": 0.8}), html.H3(id="kpi-distance", children="-- km", style={"color": COLORBLIND_PALETTE[2]}), html.Small(id="kpi-distance-detail", style={"opacity": 0.7})
@@ -480,7 +493,8 @@ def mise_en_page():
                 dbc.Col([
                     dbc.Card(id="card-map", style={"border": "none", "backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "height": HAUTEUR_CARTE, "position": "relative", "overflow": "hidden", **transition_style}, children=[
                         dcc.Loading(custom_spinner=custom_spinner, target_components={"map-lines": "children", "map-isochrones": "children", "map-markers": "children"}, children=[
-                            html.Div(style={"position": "relative"}, children=[
+                            html.Div(style={"position": "relative"}, role="region",
+                                     **{"aria-label": "Recherche et carte du trajet (le résumé écrit du trajet est annoncé après chaque recherche)"}, children=[
                                         
                                 # PANNEAU RECHERCHE FLOTTANT (Onglet 1)
                                 html.Div(id="search-panel", style={
@@ -491,10 +505,10 @@ def mise_en_page():
                                 }, children=[
                                     html.H5(html.I(className="fa-solid fa-route me-2"), className="mb-2", style={"color": CARMILLON}),
                                             
-                                    html.Label("Départ :", className="fw-bold mb-1", style={"fontSize": "0.9rem"}),
+                                    html.Label("Départ :", htmlFor="input-depart", className="fw-bold mb-1", style={"fontSize": "0.9rem"}),
                                     dcc.Dropdown(id="input-depart", options=gares_opts, placeholder="Gare de départ...", searchable=True, className="mb-2"),
                                             
-                                    html.Label("Destination :", className="fw-bold mb-1", style={"fontSize": "0.9rem"}),
+                                    html.Label("Destination :", htmlFor="input-arrivee", className="fw-bold mb-1", style={"fontSize": "0.9rem"}),
                                     dcc.Dropdown(id="input-arrivee", placeholder="Rechercher un lieu...", searchable=True, search_order="original", className="mb-2"),   # garde l'ordre du serveur : ville, ses événements, le reste
                                             
                                     html.Label("Aller :", className="fw-bold mb-1", style={"fontSize": "0.9rem"}),
@@ -566,7 +580,8 @@ def mise_en_page():
         ]),
 
         # CONTENU DE L'ONGLET 2 (ANALYSE SCNF - SINGLE SCREEN)
-        html.Div(id="tab-2-content", style={"display": "block"}, children=[
+        html.Div(id="tab-2-content", style={"display": "block"}, role="region", **{"aria-label": "Analyse de la couverture ferroviaire"}, children=[
+            html.Div(id="lecture-analyse", className="visually-hidden", role="status", **{"aria-live": "polite", "aria-atomic": "true"}),
             # BARRE DE RECHERCHE & FILTRES
             dbc.Card(id="tab2-search-bar", className="dash-card mb-3", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], **transition_style}, children=[
                 dbc.CardBody(className="py-2 px-3", children=[
@@ -686,7 +701,7 @@ def mise_en_page():
                     # RANGÉE BASSE DE PILOTAGE : BOUTON PLAN D'ACTION + EXPORT DE RAPPORT
                     dbc.Row(className="g-3", children=[
                         dbc.Col(
-                            dbc.Card(className="dash-card p-2 px-3", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], **transition_style}, children=[
+                            dbc.Card(id="card-outils", className="dash-card p-2 px-3", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], **transition_style}, children=[
                                 dbc.Row(className="align-items-center", children=[
                                     dbc.Col([
                                         html.H6([html.I(className="fa-solid fa-sliders me-2", style={"color": CARMILLON}), "Outils d'Aide à la Décision"], className="fw-bold m-0 text-uppercase", style={"fontSize": "0.85rem"}),
@@ -808,6 +823,13 @@ app.clientside_callback(
     Input("tabs-navigation", "active_tab")
 )
 
+# Au chargement, l'interrupteur de thème se règle sur le mode clair / sombre du système (src/assets/trains.js).
+app.clientside_callback(
+    ClientsideFunction(namespace="trains", function_name="themeSysteme"),
+    Output("theme-switch", "value"),
+    Input("theme-switch", "id")
+)
+
 @app.callback(
     Output("modal-plan-action", "is_open"),
     [Input("btn-open-modal", "n_clicks"), Input("btn-close-modal", "n_clicks")],
@@ -896,13 +918,13 @@ def update_destinations(recherche, categorie, choisi):
         return []
 
 @app.callback(
-    [Output("main-container", "style"), Output("top-bar", "style"), Output("search-panel", "style"), Output("logo-img", "style"),
+    [Output("main-container", "style"), Output("main-container", "className"), Output("top-bar", "style"), Output("search-panel", "style"), Output("logo-img", "style"),
      Output("tab2-search-bar", "style"),
      Output("card-kpi-dist", "style"), Output("card-kpi-trans", "style"), Output("card-kpi-statut", "style"),
      Output("card-kpi-global-1", "style"), Output("card-kpi-global-2", "style"), Output("card-kpi-global-3", "style"),
      Output("card-map", "style"), Output("card-g1", "style"), Output("card-g3", "style"),
-     Output("card-g4-saison", "style"),
-     Output("map-tiles", "url"),
+     Output("card-g4-saison", "style"), Output("card-outils", "style"),
+     Output("map-tiles", "url"), Output("card-map", "className"),
      Output("t2-kpi-couverture", "children"), Output("t2-kpi-sites", "children"), Output("t2-kpi-blanches", "children"),
      Output("graph-1", "figure"), Output("graph-3", "figure"), Output("graph-4", "figure"),
      Output("table-container", "children"),
@@ -1012,13 +1034,14 @@ def update_ui_and_graphs(theme_values, categorie, t2_clicks, table_mode, click_d
 
     return (
         {"backgroundColor": colors["bg"], "color": colors["text"], "minHeight": "100vh", "padding": "12px 20px", **transition_style},
+        colors["root_class"],
         {"backgroundColor": colors["card_bg"], "borderRadius": "12px", "color": colors["text"], **transition_style}, 
         search_panel_st, logo_st, search_bar_t2_st,
         card_iti, card_iti, card_iti,
         card_st, card_st, card_st,
         {"backgroundColor": colors["card_bg"], "color": colors["text"], "border": "none", "height": HAUTEUR_CARTE, "position": "relative", "overflow": "hidden", **transition_style},
-        card_st, card_st, card_st,
-        colors["tiles"],
+        card_st, card_st, card_st, card_st,
+        colors["tiles"], colors["map_class"],
         kpi_couv, kpi_sites, kpi_blanc,
         fig1, fig3, fig4, generate_decision_table(theme, selected_regions, mode=table_mode),
         drilldown_text, btn_reset_style, card_iti
@@ -1037,9 +1060,15 @@ def _duree(secondes):
 def _heure(texte):
     return datetime.fromisoformat(texte).strftime("%H:%M")
 
+def _horaire_section(etape):
+    """« · 08:53 → 09:20 » : départ et arrivée d'un train ou d'un car dans le détail d'une option (rien pour la marche ou sans horaire)."""
+    if etape["marche"] or not (etape.get("depart") and etape.get("arrivee")):
+        return ""
+    return f" · {_heure(etape['depart'])}→{_heure(etape['arrivee'])}"
+
 def _echantillon(couleur, tirets):
     """Petit trait qui reprend la couleur et le motif d'un service (pour reconnaître la ligne sur la carte sans se fier à la couleur)."""
-    base = {"display": "inline-block", "width": "38px", "height": "5px", "marginRight": "8px", "verticalAlign": "middle", "borderRadius": "3px"}
+    base = {"display": "inline-block", "width": "30px", "height": "5px", "marginRight": "6px", "verticalAlign": "middle", "borderRadius": "3px"}
     if not tirets:
         return html.Span(style={**base, "backgroundColor": couleur})
     arrets, position = [], 0.0
@@ -1049,14 +1078,14 @@ def _echantillon(couleur, tirets):
     return html.Span(style={**base, "background": f"repeating-linear-gradient(90deg, {', '.join(arrets)})"})
 
 def _carte_option(i, trajet, actif, traces, etiquettes=()):
-    """Un bloc cliquable : étiquettes (le plus rapide…), heures, durée, correspondances, puis un trait + le nom de chaque train."""
+    """Un bloc cliquable : étiquettes (le plus rapide…), heures, durée, correspondances, puis un trait + le nom et les horaires de chaque train."""
     puces = [html.Span([html.I(className=f"fa-solid {icone} me-1"), texte], className="badge rounded-pill me-1", style={"backgroundColor": couleur, "fontSize": "0.68rem"})
              for texte, icone, couleur in etiquettes]
     lignes = [html.Div(className="mb-0", style={"fontSize": "0.8rem", "whiteSpace": "nowrap", "overflow": "hidden", "textOverflow": "ellipsis"}, children=[_echantillon(t["style"]["couleur"], t["style"]["tirets"]), html.Span(t["libelle"], className="fw-bold" if not t["marche"] else ""),
-                                                   html.Span("" if t["marche"] else f" · {t['style']['libelle']}", style={"opacity": 0.7})]) for t in traces]
+                                                   html.Span(_horaire_section(t), style={"opacity": 0.7})]) for t in traces]
     co2 = trajet.get("co2_g")
     retard = max([sec.get("retard_min") or 0 for sec in trajet["sections"] if sec["type"] == "public_transport"] or [0])
-    return html.Div(style={"flex": "0 0 auto"}, children=html.Div(id={"type": "option", "index": i}, n_clicks=0, role="button", tabIndex=0, children=[
+    return html.Div(style={"flex": "0 0 auto"}, children=html.Div(id={"type": "option", "index": i}, n_clicks=0, role="button", tabIndex=0, **{"aria-pressed": "true" if actif else "false"}, children=[
         *([html.Div(puces, className="mb-2")] if puces else []),
         html.Div([html.Span(f"Option {i + 1}", className="badge me-2", style={"backgroundColor": CARMILLON if actif else "#6c757d"}),
                   html.Span(f"{_heure(trajet['depart'])} → {_heure(trajet['arrivee'])}", className="fs-6 fw-bold")]),
@@ -1143,6 +1172,40 @@ def lancer_recherche(n_clicks, depart, arrivee, date_aller, heure_aller, aller_r
 
 
 @app.callback(
+    Output("lecture-itineraire", "children"),
+    [Input("store-resultat", "data"), Input("store-selection", "data")]
+)
+def resumer_itineraire(r, selection):
+    """Résumé écrit du trajet choisi : annoncé par les lecteurs d'écran à chaque recherche ou changement d'option, et lu par le bouton « Écouter »."""
+    return lecture.resume_itineraire(r, selection)
+
+
+@app.callback(
+    Output("lecture-analyse", "children"),
+    [Input("t2-kpi-couverture", "children"), Input("t2-kpi-sites", "children"), Input("t2-kpi-blanches", "children")]
+)
+def resumer_analyse(couverture, sites, blanches):
+    """Résumé écrit des trois indicateurs de l'onglet Analyse (même usage que le résumé de l'itinéraire)."""
+    return lecture.resume_analyse(couverture, sites, blanches)
+
+
+# Le bouton « Écouter » lit le résumé de l'onglet ouvert à voix haute ; changer d'onglet arrête la lecture (src/assets/lecture.js).
+app.clientside_callback(
+    ClientsideFunction(namespace="lecture", function_name="ecouter"),
+    Output("store-js-lecture", "data"),
+    Input("btn-ecouter", "n_clicks"),
+    State("tabs-navigation", "active_tab"),
+    prevent_initial_call=True
+)
+app.clientside_callback(
+    ClientsideFunction(namespace="lecture", function_name="arreter"),
+    Output("store-js-lecture-onglet", "data"),
+    Input("tabs-navigation", "active_tab"),
+    prevent_initial_call=True
+)
+
+
+@app.callback(
     [Output("store-selection", "data", allow_duplicate=True), Output("store-horloge", "data", allow_duplicate=True)],
     [Input({"type": "option", "index": ALL}, "n_clicks"), Input("sens", "value")],
     State("store-selection", "data"),
@@ -1184,8 +1247,8 @@ def afficher_resultat(r, selection, categorie):
     titre = f"{'Retour' if retour else 'Aller'} · {de['nom']} → {vers['nom']}" if gare else "Trajets proposés"
     liaison = ((de["lon"], de["lat"]), (vers["lon"], vers["lat"])) if gare else ((dep["lon"], dep["lat"]),) * 2
 
-    traces_options = [tracer_trajet(t, reseau_ferre, *liaison) for t in trajets]
-    traces = traces_options[index] if trajets else tracer_trajet(None, reseau_ferre, *liaison)
+    traces_options = [tracer_trajet(t, reseau_ferre, *liaison, engine=engine) for t in trajets]
+    traces = traces_options[index] if trajets else tracer_trajet(None, reseau_ferre, *liaison, engine=engine)
     if r["erreur_api"]:
         blocs = _message(f"Horaires indisponibles ({r['erreur_api']}). La liaison directe entre les gares est tracée.", "warning")
     elif gare is None:
@@ -1315,8 +1378,8 @@ app.clientside_callback(
 
 @app.server.route("/sprite-train/<cle>.png")
 def sprite_train(cle):
-    """Image d'un train, recadrée en mémoire à partir de assets/train/ (voir lib/sprites.py)."""
-    png = sprites.sprite_png(cle) if cle in sprites.IMAGES else None
+    """Image d'un train ou d'un bus, recadrée en mémoire à partir de assets/train/ ou assets/bus/ (voir lib/sprites.py)."""
+    png = sprites.sprite_png(cle) if cle in sprites.IMAGES or cle in sprites.BUS_IMAGES else None
     if png is None:
         abort(404)
     return Response(png, mimetype="image/png", headers={"Cache-Control": "public, max-age=86400"})

@@ -25,7 +25,7 @@ Un dashboard en deux onglets, construit sur les données ouvertes (SNCF, DATAtou
 ### 1. Prérequis
 
 - Python 3.11 ou plus récent, et Git.
-- Environ 15 Go d'espace disque libre, dont environ 9 Go pour la base de données une fois les données téléchargées.
+- Environ 20 Go d'espace disque libre, dont environ 9 Go pour la base de données et 5 Go pour l'extrait OpenStreetMap de la France (tracé des cars), une fois les données téléchargées.
 
 ### 2. Récupérer le projet
 
@@ -90,12 +90,14 @@ MySNCF-Experience/
 │   ├── initialize.py                               Point d'entrée : crée la base, télécharge les sources, lance la transformation
 │   ├── assets/                                     Fichiers chargés par le navigateur
 │   │   ├── trains.js                               Animation des trains sur la carte
+│   │   ├── lecture.js                              Bouton « Écouter » (voix du navigateur) et clavier
 │   │   └── trains.css
 │   ├── transformation/                             Nettoyage et chargement des données dans la base (un module par domaine)
 │   │   ├── transformation.py                       Lance toutes les étapes dans l'ordre
 │   │   ├── gare.py · culture.py · tourisme.py …    Lieux : gares, culture, tourisme, événements, vélo
 │   │   ├── sncf.py · transilien.py · bus.py …      Horaires de tous les réseaux (trains, bus, tram)
 │   │   ├── voies.py · trace_trajets.py             Tracé des voies et des trajets
+│   │   ├── lignes_bus.py · routes.py               Lignes de bus et routes d'OpenStreetMap (tracé des cars)
 │   │   └── geo.py · lieux.py                       Outils communs
 │   └── EDA/                                        Notebooks d'analyse exploratoire
 │
@@ -107,19 +109,21 @@ MySNCF-Experience/
 │   ├── itineraire.py                               Logique de l'onglet Itinéraire (recherche, trajets, dernier kilomètre)
 │   ├── navitia.py                                  API SNCF : gares et itinéraires
 │   ├── reseau_ferre.py                             Réseau des voies et plus court chemin
+│   ├── trace_bus.py · reseau_routier.py            Tracé d'un car sur la route de sa ligne, sinon arrêt par arrêt
 │   ├── circulations.py                             Trains en circulation sur tout le réseau
 │   ├── suivi.py                                    Position d'un train à un instant donné
-│   ├── sprites.py                                  Images des trains, à l'échelle de la carte
+│   ├── lecture.py                                  Résumés écrits de la page (lecteurs d'écran et bouton « Écouter »)
+│   ├── sprites.py                                  Images des trains et des bus, à l'échelle de la carte
 │   ├── flux.py                                     Flux temps réel des vélos en libre-service
 │   └── downloader.py                               Téléchargement des sources dans data/
 │
 ├── migrations/                                     Évolutions du schéma de la base (Alembic)
 │   ├── migration.py
-│   └── versions/                                   001_schema_initial, 002_troncon_voie, 003_trace_trajet…
+│   └── versions/                                   001_schema_initial, 002_troncon_voie, 003_trace_trajet, 004_ligne_bus, 005_troncon_route…
 │
 ├── tests/                                          Un fichier de tests par fonctionnalité (pytest)
 ├── data/                                           Sources téléchargées et base générée (non versionnées)
-├── assets/                                         Logo, images des trains, captures du README
+├── assets/                                         Logo, images des trains et des bus, captures du README
 ├── .env.example                                    Modèle de configuration (à copier en .env)
 └── requirements.txt                                Dépendances Python
 ```
@@ -162,6 +166,7 @@ PostgreSQL possible en changeant l'URL).
   Les heures de passage sont en secondes depuis minuit (elles dépassent 86 400 après minuit) ; `calendrier` donne les jours de circulation.
 - **Emplacements** : tout ce qui a une position est un `lieu`, rattaché à sa gare la plus proche (`gare_proche_id`, `distance_gare_km`).
 - **Tracé** : `troncon_voie` contient les voies du réseau ferré national ; `trace_trajet` en déduit le tracé entre deux arrêts consécutifs.
+- **Cars** : `ligne_bus` contient les lignes de bus d'OpenStreetMap et `troncon_route` les routes entre carrefours (sans lien avec les autres tables). Un car suit sa ligne OpenStreetMap, sinon la route arrêt par arrêt, sinon une ligne droite (`lib/trace_bus.py`).
 
 Modifier le schéma :
 
@@ -202,8 +207,10 @@ python src/transformation/transformation.py   # toutes les étapes dans l'ordre 
 | `velo.py` | stationnement cyclable, Vélib', Vélo'v | `lieu` (station_velo), `station_velo` |
 | `bus.py` | 21 réseaux urbains et Île-de-France Mobilités | tables de transport |
 | `voies.py` · `trace_trajets.py` | voies du réseau ferré national (SNCF Réseau) | `troncon_voie`, `trace_trajet` |
+| `lignes_bus.py` | lignes de bus d'OpenStreetMap (extrait France, 5 Go) | `ligne_bus` |
+| `routes.py` | routes d'OpenStreetMap où un car peut passer (extrait France) | `troncon_route` |
 
-La Corse et l'outre-mer sont écartés pour l'instant. Les détails de chaque étape (rattachement des arrêts aux gares, doublons
+La transformation complète prend environ 25 minutes de plus avec le tracé des cars (`lignes_bus.py` et `routes.py` lisent chacun le fichier OpenStreetMap). La Corse et l'outre-mer sont écartés pour l'instant. Les détails de chaque étape (rattachement des arrêts aux gares, doublons
 écartés…) sont dans l'en-tête de son module. Pour ajouter un domaine : créer son module avec une fonction `transformer()`, puis
 l'ajouter à `ETAPES` dans `transformation.py`. Relançable sans risque : les données de chaque source sont remplacées à chaque passage.
 

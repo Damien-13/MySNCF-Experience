@@ -3,6 +3,7 @@
 Transport (GTFS, tous réseaux) : reseau → ligne → circulation → passage → arret.
 Emplacements : lieu (gare, arrêt de bus, station vélo, culture, tourisme…) ; gare et station_velo en précisent le type.
 Tracé du réseau ferré national : troncon_voie (polylignes, sans lien avec les tables de transport) ; trace_trajet en déduit le tracé entre deux arrêts consécutifs.
+Tracé des cars : ligne_bus (lignes de bus d'OpenStreetMap) et troncon_route (routes entre carrefours), sans lien avec les tables de transport.
 Événements : evenement → evenement_lieu → lieu, et evenement_periode.
 Identifiants GTFS préfixés par le réseau (« sncf:… ») pour rester uniques entre réseaux.
 Heures de passage en secondes depuis minuit (peuvent dépasser 86400 pour les trains de nuit).
@@ -163,3 +164,42 @@ class EvenementPeriode(Base):
     evenement_id: Mapped[int] = mapped_column(ForeignKey("evenement.id"), index=True)
     date_debut: Mapped[dt.date] = mapped_column(Date, index=True)
     date_fin: Mapped[dt.date] = mapped_column(Date)
+
+
+# ── Tracé des lignes de bus ─────────────────────────────────────────────────────
+class LigneBus(Base):
+    """Ligne de bus ou de car telle que dessinée dans OpenStreetMap (relation route=bus), sans lien avec les tables de transport :
+    on la retrouve par la position des arrêts (voir lib/trace_bus.py).
+    geometrie : liste JSON de polylignes [[[lon, lat], …], …], une par tronçon de route, dans l'ordre de la relation, simplifiées.
+    lat_min…lon_max : boîte englobante, pour chercher les lignes qui passent près d'un arrêt."""
+    __tablename__ = "ligne_bus"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)   # identifiant de la relation OSM
+    ref: Mapped[str | None] = mapped_column(String, index=True)  # numéro de la ligne (« 89047 », « 12 »)
+    nom: Mapped[str | None] = mapped_column(String)
+    reseau: Mapped[str | None] = mapped_column(String)           # tag network (« ZOU ! »)
+    exploitant: Mapped[str | None] = mapped_column(String)       # tag operator
+    de: Mapped[str | None] = mapped_column(String)
+    vers: Mapped[str | None] = mapped_column(String)
+    geometrie: Mapped[str] = mapped_column(Text)
+    longueur_km: Mapped[float | None] = mapped_column(Float)
+    lat_min: Mapped[float] = mapped_column(Float, index=True)
+    lat_max: Mapped[float] = mapped_column(Float, index=True)
+    lon_min: Mapped[float] = mapped_column(Float, index=True)
+    lon_max: Mapped[float] = mapped_column(Float, index=True)
+
+
+# ── Réseau routier ──────────────────────────────────────────────────────────────
+class TronconRoute(Base):
+    """Morceau de route entre deux carrefours (OpenStreetMap), pour tracer un car arrêt par arrêt (lib/reseau_routier.py).
+    Seules les routes où un car peut passer sont gardées : ni pistes, ni chemins, ni voies de service.
+    classe : type de route OpenStreetMap (motorway, trunk, primary, secondary, tertiary, unclassified, residential, busway…), qui donne la vitesse.
+    sens : 0 double sens, 1 sens unique dans le sens de la géométrie.
+    tuile : carré de 0,1° (environ 10 km) du milieu du tronçon, pour charger rapidement les routes d'une zone.
+    geometrie : liste JSON de points [[lon, lat], …]."""
+    __tablename__ = "troncon_route"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    classe: Mapped[str] = mapped_column(String)
+    sens: Mapped[int] = mapped_column(Integer)
+    tuile: Mapped[int] = mapped_column(Integer, index=True)
+    geometrie: Mapped[str] = mapped_column(Text)
+    longueur_m: Mapped[float] = mapped_column(Float)
