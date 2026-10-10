@@ -27,7 +27,7 @@
   const LONGUEUR_MIN_TOUS_PX = 6;    // plancher beaucoup plus petit pour les trains « tous réseaux » : de petits repères en dézoomant, sans encombrer la carte (0 = échelle exacte, ils disparaissent)
   const LARGEUR_MAX_PX = 700;
   const RAPPORT_BUS_MAX = 8;          // une image plus trapue qu'un rapport de 8 (largeur / hauteur) est un bus : on ne l'élargit pas
-  const ETIREMENT = 1.8;             // les trains vus du dessus sont très fins : on les élargit un peu pour qu'on les reconnaisse
+  const ETIREMENT = 1.8;             // les trains vus du dessus sont très fins : on les élargit un peu pour qu'on les reconnaisse (moins pour un train déjà trapu, comme le TER Zou)
   const ZOOM_SUIVI = 12;             // niveau de zoom atteint en cliquant sur un train (on ne dézoome jamais : si on est déjà plus près, on reste)
   const LISSAGE_CAP_M = 60;          // le cap du train est calculé sur ± cette distance : les virages tournent progressivement
   const PAS_TOUS_MS = 200;           // les trains « tous réseaux » sont recalculés 5 fois par seconde (il y en a des milliers)
@@ -219,7 +219,7 @@
     const reel = e.longueur_m / mpp;
     const bus = e.rapport <= RAPPORT_BUS_MAX;
     const l = Math.min(Math.max(reel, tous ? LONGUEUR_MIN_TOUS_PX : bus ? LONGUEUR_MIN_BUS_PX : LONGUEUR_MIN_PX), LARGEUR_MAX_PX);
-    const h = Math.max((l / e.rapport) * (bus ? 1 : ETIREMENT), tous ? 1.5 : 4), deg = Math.round(pos.cap - 90);
+    const h = Math.max((l / e.rapport) * (bus ? 1 : Math.min(ETIREMENT, Math.max(1, e.rapport / 12))), tous ? 1.5 : 4), deg = Math.round(pos.cap - 90);
     const d = m._derniere;
     if (d && Math.abs(d.l - l) < 0.4 && d.deg === deg) return;   // rien n'a changé à l'écran : on ne touche pas au DOM (il y a des milliers de trains)
     m._derniere = { l, deg };

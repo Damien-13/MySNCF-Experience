@@ -19,12 +19,14 @@ from PIL import Image
 DOSSIER = Path(__file__).resolve().parents[1] / "assets" / "train"
 DOSSIER_BUS = Path(__file__).resolve().parents[1] / "assets" / "bus"
 LARGEUR_PX = 700
+BORD_PX = 6
 
 # Image à utiliser par service ; chemin relatif à assets/train (les accents des dossiers varient selon le système : voir _trouver).
 IMAGES = {
     "inoui": "inouï/inouï.png",
     "ouigo": "ouigo/ouigo.png",
     "ter": "ter/ter.png",
+    "zou": "zou/zou.png",
     "rer": "RER/rer.png",
     "transilien": "Transilien/Transilien.png",
     "renfe": "Renfe AVE/Renfe AVE.png",
@@ -36,10 +38,10 @@ BUS_IMAGES = {
     "bus_transdev": "Transdev/Transdev.png",     # tous les autres cars
 }
 # Longueur réelle d'une rame en mètres : l'image du train est affichée à cette échelle sur la carte (elle grandit quand on zoome).
-LONGUEURS_M = {"inoui": 200, "ouigo": 200, "renfe": 200, "trenitalia": 200, "ter": 100, "rer": 110, "transilien": 100, "bus_zou": 13, "bus_transdev": 13}
+LONGUEURS_M = {"inoui": 200, "ouigo": 200, "renfe": 200, "trenitalia": 200, "ter": 100, "zou": 72, "rer": 110, "transilien": 100, "bus_zou": 13, "bus_transdev": 13}
 LONGUEUR_PAR_DEFAUT_M = 100
 # Accélération typique en m/s² : un TGV démarre doucement, un RER ou un Transilien beaucoup plus vite (elle règle le profil de vitesse entre deux gares).
-ACCELERATIONS = {"inoui": 0.5, "ouigo": 0.5, "renfe": 0.5, "trenitalia": 0.5, "ter": 0.8, "rer": 1.0, "transilien": 1.0, "bus_zou": 0.9, "bus_transdev": 0.9}
+ACCELERATIONS = {"inoui": 0.5, "ouigo": 0.5, "renfe": 0.5, "trenitalia": 0.5, "ter": 0.8, "zou": 0.8, "rer": 1.0, "transilien": 1.0, "bus_zou": 0.9, "bus_transdev": 0.9}
 ACCELERATION_PAR_DEFAUT = 0.7
 # Services sans image : on prend la plus proche (un Intercités ressemble à un TER, les autres trains à grande vitesse à un INOUI).
 REPLI = {"intercites": "ter", "eurostar": "inoui", "international": "inoui", "inconnu": "inoui"}
@@ -53,6 +55,8 @@ def cle_sprite(cle_style, libelle=""):
         return None
     if cle_style == "rer":
         return "rer" if "RER" in libelle.upper() else "transilien"
+    if cle_style == "ter" and "ZOU" in libelle.upper():
+        return "zou"                                     # les TER de la Région Sud ont leur propre image
     return cle_style if cle_style in IMAGES else REPLI.get(cle_style, "inoui")
 
 
@@ -99,6 +103,10 @@ def _image(cle):
     if fichier is None:
         return None
     image = Image.open(fichier).convert("RGBA")
+    image.paste((0, 0, 0, 0), (0, 0, image.width, BORD_PX))                  # certains fichiers ont un fin cadre sur leurs bords : on l'efface avant de recadrer
+    image.paste((0, 0, 0, 0), (0, image.height - BORD_PX, image.width, image.height))
+    image.paste((0, 0, 0, 0), (0, 0, BORD_PX, image.height))
+    image.paste((0, 0, 0, 0), (image.width - BORD_PX, 0, image.width, image.height))
     image = image.crop(_zone_du_train(np.array(image.getchannel("A")) > 16))
     if cle in BUS_IMAGES:
         image = image.rotate(180)

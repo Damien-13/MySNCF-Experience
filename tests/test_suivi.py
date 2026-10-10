@@ -91,6 +91,7 @@ def test_horloge_simulee_accelere_le_temps():
 def test_images_des_services():
     assert sprites.cle_sprite("inoui") == "inoui" and sprites.cle_sprite("ouigo") == "ouigo"
     assert sprites.cle_sprite("rer", "RER ZECO") == "rer" and sprites.cle_sprite("rer", "Transilien L") == "transilien"
+    assert sprites.cle_sprite("ter", "ZOU ! 17402") == "zou" and sprites.cle_sprite("ter", "REGIONAURA 883771") == "ter"      # le TER de la Région Sud a son image
     assert sprites.cle_sprite("intercites") == "ter" and sprites.cle_sprite("eurostar") == "inoui"      # pas d'image : la plus proche
     assert sprites.cle_sprite("pied") is None and sprites.cle_sprite("velo_bus") is None
     assert sprites.cle_sprite("bus", "ZOU ! 89047") == "bus_zou" and sprites.cle_sprite("bus", "Zou 400") == "bus_zou"    # « ZOU » dans le titre : image Zou
