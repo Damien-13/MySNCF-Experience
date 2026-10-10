@@ -688,7 +688,7 @@ def mise_en_page():
                     # RANGÉE BASSE DE PILOTAGE : BOUTON PLAN D'ACTION + EXPORT DE RAPPORT
                     dbc.Row(className="g-3", children=[
                         dbc.Col(
-                            dbc.Card(className="dash-card p-2 px-3", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], **transition_style}, children=[
+                            dbc.Card(id="card-outils", className="dash-card p-2 px-3", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], **transition_style}, children=[
                                 dbc.Row(className="align-items-center", children=[
                                     dbc.Col([
                                         html.H6([html.I(className="fa-solid fa-sliders me-2", style={"color": CARMILLON}), "Outils d'Aide à la Décision"], className="fw-bold m-0 text-uppercase", style={"fontSize": "0.85rem"}),
@@ -810,6 +810,13 @@ app.clientside_callback(
     Input("tabs-navigation", "active_tab")
 )
 
+# Au chargement, l'interrupteur de thème se règle sur le mode clair / sombre du système (src/assets/trains.js).
+app.clientside_callback(
+    ClientsideFunction(namespace="trains", function_name="themeSysteme"),
+    Output("theme-switch", "value"),
+    Input("theme-switch", "id")
+)
+
 @app.callback(
     Output("modal-plan-action", "is_open"),
     [Input("btn-open-modal", "n_clicks"), Input("btn-close-modal", "n_clicks")],
@@ -903,7 +910,7 @@ def update_destinations(recherche, categorie, choisi):
      Output("card-kpi-dist", "style"), Output("card-kpi-trans", "style"), Output("card-kpi-statut", "style"),
      Output("card-kpi-global-1", "style"), Output("card-kpi-global-2", "style"), Output("card-kpi-global-3", "style"),
      Output("card-map", "style"), Output("card-g1", "style"), Output("card-g3", "style"),
-     Output("card-g4-saison", "style"),
+     Output("card-g4-saison", "style"), Output("card-outils", "style"),
      Output("map-tiles", "url"), Output("card-map", "className"),
      Output("t2-kpi-couverture", "children"), Output("t2-kpi-sites", "children"), Output("t2-kpi-blanches", "children"),
      Output("graph-1", "figure"), Output("graph-3", "figure"), Output("graph-4", "figure"),
@@ -1020,7 +1027,7 @@ def update_ui_and_graphs(theme_values, categorie, t2_clicks, table_mode, click_d
         card_iti, card_iti, card_iti,
         card_st, card_st, card_st,
         {"backgroundColor": colors["card_bg"], "color": colors["text"], "border": "none", "height": HAUTEUR_CARTE, "position": "relative", "overflow": "hidden", **transition_style},
-        card_st, card_st, card_st,
+        card_st, card_st, card_st, card_st,
         colors["tiles"], colors["map_class"],
         kpi_couv, kpi_sites, kpi_blanc,
         fig1, fig3, fig4, generate_decision_table(theme, selected_regions, mode=table_mode),
