@@ -154,14 +154,14 @@ THEME_COLORS = {
         "card_bg": "#ffffff", 
         "text": "#212529",
         "tiles": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-        "map_class": "",
+        "map_class": "", "root_class": "",
     },
     "dark": {
         "bg": "#11151c", 
         "card_bg": "#1a202c", 
         "text": "#f1f1f1",
         "tiles": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-        "map_class": "carte-sombre",
+        "map_class": "carte-sombre", "root_class": "theme-sombre",
     }
 }
 transition_style = {"transition": "background-color 0.4s ease, color 0.4s ease"}
@@ -898,7 +898,7 @@ def update_destinations(recherche, categorie, choisi):
         return []
 
 @app.callback(
-    [Output("main-container", "style"), Output("top-bar", "style"), Output("search-panel", "style"), Output("logo-img", "style"),
+    [Output("main-container", "style"), Output("main-container", "className"), Output("top-bar", "style"), Output("search-panel", "style"), Output("logo-img", "style"),
      Output("tab2-search-bar", "style"),
      Output("card-kpi-dist", "style"), Output("card-kpi-trans", "style"), Output("card-kpi-statut", "style"),
      Output("card-kpi-global-1", "style"), Output("card-kpi-global-2", "style"), Output("card-kpi-global-3", "style"),
@@ -1014,6 +1014,7 @@ def update_ui_and_graphs(theme_values, categorie, t2_clicks, table_mode, click_d
 
     return (
         {"backgroundColor": colors["bg"], "color": colors["text"], "minHeight": "100vh", "padding": "12px 20px", **transition_style},
+        colors["root_class"],
         {"backgroundColor": colors["card_bg"], "borderRadius": "12px", "color": colors["text"], **transition_style}, 
         search_panel_st, logo_st, search_bar_t2_st,
         card_iti, card_iti, card_iti,
