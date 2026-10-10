@@ -385,7 +385,7 @@ def generate_decision_table(theme="light", regions=None, mode="pires"):
 # ==============================================================================
 HAUTEUR_CARTE = "max(640px, calc(100vh - 240px))"      # toute la hauteur de l'écran sous les KPI, pour ne pas avoir à descendre
 # Panneau des trajets (par-dessus la carte, à droite du panneau de recherche) et bouton pour le rouvrir.
-STYLE_PANNEAU = {"position": "absolute", "top": "16px", "right": "16px", "width": "300px", "maxHeight": "calc(100% - 32px)", "overflowY": "auto", "zIndex": "1000",
+STYLE_PANNEAU = {"position": "absolute", "top": "16px", "right": "16px", "width": "325px", "maxHeight": "calc(100% - 32px)", "overflowY": "auto", "zIndex": "1000",
                  "borderRadius": "15px", "boxShadow": "0px 4px 15px rgba(0,0,0,0.3)"}
 STYLE_OUVRIR = {"position": "absolute", "top": "16px", "right": "16px", "zIndex": "1000", "backgroundColor": CARMILLON, "border": "none", "fontWeight": "bold",
                 "boxShadow": "0px 4px 15px rgba(0,0,0,0.3)"}
@@ -1047,9 +1047,15 @@ def _duree(secondes):
 def _heure(texte):
     return datetime.fromisoformat(texte).strftime("%H:%M")
 
+def _horaire_section(etape):
+    """« · 08:53 → 09:20 » : départ et arrivée d'un train ou d'un car dans le détail d'une option (rien pour la marche ou sans horaire)."""
+    if etape["marche"] or not (etape.get("depart") and etape.get("arrivee")):
+        return ""
+    return f" · {_heure(etape['depart'])}→{_heure(etape['arrivee'])}"
+
 def _echantillon(couleur, tirets):
     """Petit trait qui reprend la couleur et le motif d'un service (pour reconnaître la ligne sur la carte sans se fier à la couleur)."""
-    base = {"display": "inline-block", "width": "38px", "height": "5px", "marginRight": "8px", "verticalAlign": "middle", "borderRadius": "3px"}
+    base = {"display": "inline-block", "width": "30px", "height": "5px", "marginRight": "6px", "verticalAlign": "middle", "borderRadius": "3px"}
     if not tirets:
         return html.Span(style={**base, "backgroundColor": couleur})
     arrets, position = [], 0.0
@@ -1059,11 +1065,11 @@ def _echantillon(couleur, tirets):
     return html.Span(style={**base, "background": f"repeating-linear-gradient(90deg, {', '.join(arrets)})"})
 
 def _carte_option(i, trajet, actif, traces, etiquettes=()):
-    """Un bloc cliquable : étiquettes (le plus rapide…), heures, durée, correspondances, puis un trait + le nom de chaque train."""
+    """Un bloc cliquable : étiquettes (le plus rapide…), heures, durée, correspondances, puis un trait + le nom et les horaires de chaque train."""
     puces = [html.Span([html.I(className=f"fa-solid {icone} me-1"), texte], className="badge rounded-pill me-1", style={"backgroundColor": couleur, "fontSize": "0.68rem"})
              for texte, icone, couleur in etiquettes]
     lignes = [html.Div(className="mb-0", style={"fontSize": "0.8rem", "whiteSpace": "nowrap", "overflow": "hidden", "textOverflow": "ellipsis"}, children=[_echantillon(t["style"]["couleur"], t["style"]["tirets"]), html.Span(t["libelle"], className="fw-bold" if not t["marche"] else ""),
-                                                   html.Span("" if t["marche"] else f" · {t['style']['libelle']}", style={"opacity": 0.7})]) for t in traces]
+                                                   html.Span(_horaire_section(t), style={"opacity": 0.7})]) for t in traces]
     co2 = trajet.get("co2_g")
     retard = max([sec.get("retard_min") or 0 for sec in trajet["sections"] if sec["type"] == "public_transport"] or [0])
     return html.Div(style={"flex": "0 0 auto"}, children=html.Div(id={"type": "option", "index": i}, n_clicks=0, role="button", tabIndex=0, children=[
@@ -1194,8 +1200,8 @@ def afficher_resultat(r, selection, categorie):
     titre = f"{'Retour' if retour else 'Aller'} · {de['nom']} → {vers['nom']}" if gare else "Trajets proposés"
     liaison = ((de["lon"], de["lat"]), (vers["lon"], vers["lat"])) if gare else ((dep["lon"], dep["lat"]),) * 2
 
-    traces_options = [tracer_trajet(t, reseau_ferre, *liaison) for t in trajets]
-    traces = traces_options[index] if trajets else tracer_trajet(None, reseau_ferre, *liaison)
+    traces_options = [tracer_trajet(t, reseau_ferre, *liaison, engine=engine) for t in trajets]
+    traces = traces_options[index] if trajets else tracer_trajet(None, reseau_ferre, *liaison, engine=engine)
     if r["erreur_api"]:
         blocs = _message(f"Horaires indisponibles ({r['erreur_api']}). La liaison directe entre les gares est tracée.", "warning")
     elif gare is None:
@@ -1325,8 +1331,8 @@ app.clientside_callback(
 
 @app.server.route("/sprite-train/<cle>.png")
 def sprite_train(cle):
-    """Image d'un train, recadrée en mémoire à partir de assets/train/ (voir lib/sprites.py)."""
-    png = sprites.sprite_png(cle) if cle in sprites.IMAGES else None
+    """Image d'un train ou d'un bus, recadrée en mémoire à partir de assets/train/ ou assets/bus/ (voir lib/sprites.py)."""
+    png = sprites.sprite_png(cle) if cle in sprites.IMAGES or cle in sprites.BUS_IMAGES else None
     if png is None:
         abort(404)
     return Response(png, mimetype="image/png", headers={"Cache-Control": "public, max-age=86400"})

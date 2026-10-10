@@ -133,7 +133,8 @@ def test_tracer_trajet_marche_et_dernier_km():
     assert {itineraire.style_dernier_km(m)["tirets"] for m in ("Marche à pied", "Vélo / Bus", "Voiture / Taxi")} == {"1 9", "10 7", "18 8"}
 
 
-def test_car_passe_par_ses_arrets_sans_suivre_les_rails():
+def test_car_passe_par_ses_arrets_sans_suivre_les_rails(monkeypatch):
+    monkeypatch.setattr(itineraire, "trace_car", lambda arrets, engine=None: ([tuple(a) for a in arrets], False))      # aucune ligne de bus ni route connue : les arrêts, en ligne droite
     reseau = construire_reseau(VOIE)
     car = {"type": "public_transport", "mode": "train", "mode_physique": "Autocar", "ligne": "TER", "numero": "99", "duree_s": 1800, "de_lonlat": (2.0, 48.0),
            "vers_lonlat": (2.2, 48.0), "arrets_lonlat": [(2.0, 48.0), (2.05, 48.02), (2.2, 48.0)]}
@@ -141,6 +142,14 @@ def test_car_passe_par_ses_arrets_sans_suivre_les_rails():
     assert etapes[0]["points"] == [[48.0, 2.0], [48.02, 2.05], [48.0, 2.2]] and etapes[0]["style"]["cle"] == "bus" and not etapes[0]["sur_voie"]
     car["arrets_lonlat"] = []                                                                     # sans liste d'arrêts : droit de départ à arrivée
     assert itineraire.tracer_trajet({"sections": [car]}, reseau, (2.0, 48.0), (2.2, 48.0))[0]["points"] == [[48.0, 2.0], [48.0, 2.2]]
+
+
+def test_car_suit_le_trace_trouve_sur_la_route(monkeypatch):
+    monkeypatch.setattr(itineraire, "trace_car", lambda arrets, engine=None: ([(2.0, 48.0), (2.1, 48.05), (2.2, 48.0)], True))
+    car = {"type": "public_transport", "mode": "train", "mode_physique": "Autocar", "ligne": "TER", "numero": "99", "duree_s": 1800, "de_lonlat": (2.0, 48.0),
+           "vers_lonlat": (2.2, 48.0), "arrets_lonlat": [(2.0, 48.0), (2.2, 48.0)]}
+    etape = itineraire.tracer_trajet({"sections": [car]}, construire_reseau(VOIE), (2.0, 48.0), (2.2, 48.0))[0]
+    assert etape["points"] == [[48.0, 2.0], [48.05, 2.1], [48.0, 2.2]] and etape["sur_voie"]
 
 
 def test_etiquettes_des_options_comme_waze():
