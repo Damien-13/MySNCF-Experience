@@ -1194,8 +1194,8 @@ def afficher_resultat(r, selection, categorie):
     titre = f"{'Retour' if retour else 'Aller'} · {de['nom']} → {vers['nom']}" if gare else "Trajets proposés"
     liaison = ((de["lon"], de["lat"]), (vers["lon"], vers["lat"])) if gare else ((dep["lon"], dep["lat"]),) * 2
 
-    traces_options = [tracer_trajet(t, reseau_ferre, *liaison) for t in trajets]
-    traces = traces_options[index] if trajets else tracer_trajet(None, reseau_ferre, *liaison)
+    traces_options = [tracer_trajet(t, reseau_ferre, *liaison, engine=engine) for t in trajets]
+    traces = traces_options[index] if trajets else tracer_trajet(None, reseau_ferre, *liaison, engine=engine)
     if r["erreur_api"]:
         blocs = _message(f"Horaires indisponibles ({r['erreur_api']}). La liaison directe entre les gares est tracée.", "warning")
     elif gare is None:

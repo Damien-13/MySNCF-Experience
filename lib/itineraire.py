@@ -22,6 +22,7 @@ import sqlalchemy as sa
 
 from lib import navitia
 from lib.db.connection import get_engine
+from lib.trace_bus import trace_car
 from lib.reseau_ferre import chemin, chemin_par_arrets
 
 SEUIL_PIED_KM = 1.5
@@ -260,10 +261,10 @@ def _horaires(s):
             "arrivee": str(s["arrivee"]) if s.get("arrivee") else None, "retard_min": s.get("retard_min") or 0}
 
 
-def tracer_trajet(trajet, reseau, depart, arrivee):
+def tracer_trajet(trajet, reseau, depart, arrivee, engine=None):
     """Un dict par étape du trajet, dans l'ordre : points [[lat, lon], …], sur_voie, style (style_ligne), libelle (« TER 880693 »), marche (vrai à pied),
     de, vers (noms des gares), depart, arrivee, retard_min (voir lib/suivi.py : ils servent à placer le train).
-    Les trains sont collés aux voies, en passant par chaque gare desservie ; un car passe par la suite de ses arrêts (droit d'un arrêt au suivant, sans suivre la route) ;
+    Les trains sont collés aux voies, en passant par chaque gare desservie ; un car suit la ligne de bus d'OpenStreetMap qui dessert ses arrêts (lib/trace_bus.py), et à défaut passe par la suite de ses arrêts, en ligne droite ;
     une correspondance à pied est un trait droit en petits points.
     `depart`, `arrivee` : (lon, lat) des gares, utilisées sans train pour tracer la liaison directe."""
     etapes = []
@@ -273,8 +274,8 @@ def tracer_trajet(trajet, reseau, depart, arrivee):
         de, vers = tuple(s["de_lonlat"]), tuple(s["vers_lonlat"])
         if s["type"] == "public_transport":
             style = style_ligne(s)
-            if style["cle"] == "bus":            # un car ne roule pas sur les rails : on passe par chacun de ses arrêts
-                points, ok = [tuple(a) for a in (s.get("arrets_lonlat") or [de, vers])], False
+            if style["cle"] == "bus":            # un car ne roule pas sur les rails : il suit sa ligne de bus, sinon on passe par chacun de ses arrêts
+                points, ok = trace_car(s.get("arrets_lonlat") or [de, vers], engine)
             else:                                # un train passe par chacune de ses gares : sinon le plus court chemin peut prendre d'autres lignes
                 points, ok = chemin_par_arrets(reseau, [de, *(s.get("arrets_lonlat") or [])[1:-1], vers])
             etapes.append({**_horaires(s), "points": [[lat, lon] for lon, lat in points], "sur_voie": ok, "style": style, "marche": False,
