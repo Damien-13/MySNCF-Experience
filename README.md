@@ -90,6 +90,7 @@ MySNCF-Experience/
 │   ├── initialize.py                               Point d'entrée : crée la base, télécharge les sources, lance la transformation
 │   ├── assets/                                     Fichiers chargés par le navigateur
 │   │   ├── trains.js                               Animation des trains sur la carte
+│   │   ├── lecture.js                              Bouton « Écouter » (voix du navigateur) et clavier
 │   │   └── trains.css
 │   ├── transformation/                             Nettoyage et chargement des données dans la base (un module par domaine)
 │   │   ├── transformation.py                       Lance toutes les étapes dans l'ordre
@@ -111,6 +112,7 @@ MySNCF-Experience/
 │   ├── trace_bus.py · reseau_routier.py            Tracé d'un car sur la route de sa ligne, sinon arrêt par arrêt
 │   ├── circulations.py                             Trains en circulation sur tout le réseau
 │   ├── suivi.py                                    Position d'un train à un instant donné
+│   ├── lecture.py                                  Résumés écrits de la page (lecteurs d'écran et bouton « Écouter »)
 │   ├── sprites.py                                  Images des trains et des bus, à l'échelle de la carte
 │   ├── flux.py                                     Flux temps réel des vélos en libre-service
 │   └── downloader.py                               Téléchargement des sources dans data/
