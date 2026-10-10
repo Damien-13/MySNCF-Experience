@@ -92,7 +92,9 @@ def test_images_des_services():
     assert sprites.cle_sprite("inoui") == "inoui" and sprites.cle_sprite("ouigo") == "ouigo"
     assert sprites.cle_sprite("rer", "RER ZECO") == "rer" and sprites.cle_sprite("rer", "Transilien L") == "transilien"
     assert sprites.cle_sprite("intercites") == "ter" and sprites.cle_sprite("eurostar") == "inoui"      # pas d'image : la plus proche
-    assert sprites.cle_sprite("bus") is None and sprites.cle_sprite("pied") is None
+    assert sprites.cle_sprite("pied") is None and sprites.cle_sprite("velo_bus") is None
+    assert sprites.cle_sprite("bus", "ZOU ! 89047") == "bus_zou" and sprites.cle_sprite("bus", "Zou 400") == "bus_zou"    # « ZOU » dans le titre : image Zou
+    assert sprites.cle_sprite("bus", "REGIONAURA 409710") == "bus_transdev" and sprites.cle_sprite("bus") == "bus_transdev"   # tous les autres cars : Transdev
 
 
 def test_chaque_image_est_un_png_recadre_sur_le_train():
@@ -100,6 +102,15 @@ def test_chaque_image_est_un_png_recadre_sur_le_train():
         png = sprites.sprite_png(cle)
         assert png is not None and png[:8] == b"\x89PNG\r\n\x1a\n"
         assert 10 < sprites.largeur_sur_hauteur(cle) < 30                  # une bande fine : le filigrane en coin n'élargit pas le recadrage
+
+
+def test_chaque_image_de_bus_est_un_png_recadre_sur_le_bus():
+    for cle in sprites.BUS_IMAGES:
+        png = sprites.sprite_png(cle)
+        assert png is not None and png[:8] == b"\x89PNG\r\n\x1a\n"
+        assert 2.5 < sprites.largeur_sur_hauteur(cle) < 5                  # un bus vu du dessus : environ quatre fois plus long que large
+    infos = sprites.infos("bus", "ZOU ! 89047")
+    assert infos["sprite"] == "bus_zou" and infos["longueur_m"] < 20 and infos["rapport"] < 8
 
 
 def test_recadrage_ignore_les_petits_elements_isoles():

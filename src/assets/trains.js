@@ -23,8 +23,10 @@
 (function () {
   const VITESSE_SIM = 120;           // 1 seconde réelle = 2 minutes de trajet, comme lib/suivi.py
   const LONGUEUR_MIN_PX = 16;        // plancher de longueur à l'écran pour les trains du TRAJET CHOISI : sans lui, ils disparaîtraient en dézoomant (0 = échelle exacte)
+  const LONGUEUR_MIN_BUS_PX = 34;    // plancher d'un car du trajet choisi : 13 m de long, il serait minuscule à 16 px à côté d'un train de 200 m
   const LONGUEUR_MIN_TOUS_PX = 6;    // plancher beaucoup plus petit pour les trains « tous réseaux » : de petits repères en dézoomant, sans encombrer la carte (0 = échelle exacte, ils disparaissent)
   const LARGEUR_MAX_PX = 700;
+  const RAPPORT_BUS_MAX = 8;          // une image plus trapue qu'un rapport de 8 (largeur / hauteur) est un bus : on ne l'élargit pas
   const ETIREMENT = 1.8;             // les trains vus du dessus sont très fins : on les élargit un peu pour qu'on les reconnaisse
   const ZOOM_SUIVI = 12;             // niveau de zoom atteint en cliquant sur un train (on ne dézoome jamais : si on est déjà plus près, on reste)
   const LISSAGE_CAP_M = 60;          // le cap du train est calculé sur ± cette distance : les virages tournent progressivement
@@ -157,7 +159,7 @@
   // ---------- Repères ----------
   function creerRepere(carte, e, clef, tous) {
     const sprite = e.sprite ? `<img class="tj-img" src="/sprite-train/${e.sprite}.png" alt="">` : "";
-    const pastille = e.sprite ? "" : `<div class="tj-pastille" style="background:${e.style.couleur}"><i class="fa-solid fa-bus"></i></div>`;   // seulement pour un car
+    const pastille = e.sprite ? "" : `<div class="tj-pastille" style="background:${e.style.couleur}"><i class="fa-solid fa-bus"></i></div>`;   // seulement sans image (ni train ni bus)
     const html = `<div class="tj">${sprite}${pastille}<div class="tj-cible"></div></div>`;     // tj-cible : zone de clic plus large que l'image
     const m = L.marker([e.points[0][0], e.points[0][1]], {
       icon: L.divIcon({ className: "train-js", html, iconSize: [0, 0] }), zIndexOffset: tous ? 500 : 1000, keyboard: false,
@@ -212,11 +214,12 @@
   // Taille d'un repère à l'échelle de la carte : sa longueur réelle en mètres divisée par les mètres que représente un pixel.
   function afficher(m, e, pos, carte, tous) {
     m.setLatLng([pos.lat, pos.lon]);
-    if (!m._img) return;                              // sans image de train (car) : la pastille reste
+    if (!m._img) return;                              // sans image : la pastille reste
     const mpp = (156543.03392 * Math.cos((pos.lat * Math.PI) / 180)) / Math.pow(2, carte.getZoom());
     const reel = e.longueur_m / mpp;
-    const l = Math.min(Math.max(reel, tous ? LONGUEUR_MIN_TOUS_PX : LONGUEUR_MIN_PX), LARGEUR_MAX_PX);
-    const h = Math.max((l / e.rapport) * ETIREMENT, tous ? 1.5 : 4), deg = Math.round(pos.cap - 90);
+    const bus = e.rapport <= RAPPORT_BUS_MAX;
+    const l = Math.min(Math.max(reel, tous ? LONGUEUR_MIN_TOUS_PX : bus ? LONGUEUR_MIN_BUS_PX : LONGUEUR_MIN_PX), LARGEUR_MAX_PX);
+    const h = Math.max((l / e.rapport) * (bus ? 1 : ETIREMENT), tous ? 1.5 : 4), deg = Math.round(pos.cap - 90);
     const d = m._derniere;
     if (d && Math.abs(d.l - l) < 0.4 && d.deg === deg) return;   // rien n'a changé à l'écran : on ne touche pas au DOM (il y a des milliers de trains)
     m._derniere = { l, deg };

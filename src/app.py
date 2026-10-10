@@ -1325,8 +1325,8 @@ app.clientside_callback(
 
 @app.server.route("/sprite-train/<cle>.png")
 def sprite_train(cle):
-    """Image d'un train, recadrée en mémoire à partir de assets/train/ (voir lib/sprites.py)."""
-    png = sprites.sprite_png(cle) if cle in sprites.IMAGES else None
+    """Image d'un train ou d'un bus, recadrée en mémoire à partir de assets/train/ ou assets/bus/ (voir lib/sprites.py)."""
+    png = sprites.sprite_png(cle) if cle in sprites.IMAGES or cle in sprites.BUS_IMAGES else None
     if png is None:
         abort(404)
     return Response(png, mimetype="image/png", headers={"Cache-Control": "public, max-age=86400"})
