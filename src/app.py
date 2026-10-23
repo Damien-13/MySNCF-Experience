@@ -11,6 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import base64
+from html import escape
 from datetime import date
 
 # ==============================================================================
@@ -77,7 +78,7 @@ from datetime import datetime, timedelta
 
 from lib.db.connection import get_engine
 from flask import Response, abort
-from lib import circulations, lecture, sprites, suivi
+from lib import analyse, circulations, lecture, sprites, suivi
 from lib.itineraire import FENETRE_API_JOURS, options_heures, retour_minimum, RAYON_POI_KM, chercher_destinations, etiquettes_trajets, options_gares, quand_depuis, rechercher, style_dernier_km, tracer_trajet
 from lib.reseau_ferre import charger_reseau
 
@@ -185,13 +186,6 @@ reseau_ferre = get_reseau_ferre()
 # Les horaires de tous les trains se chargent en arrière-plan (une dizaine de secondes) pour que le bouton « Tous les trains en direct » réponde vite.
 threading.Thread(target=lambda: circulations.charger(engine), daemon=True).start()
 
-def get_destinations_options():
-    try:
-        df_dest = pd.read_sql("SELECT DISTINCT nom FROM lieu WHERE type NOT IN ('arret_bus', 'arret_train') AND nom IS NOT NULL ORDER BY nom LIMIT 2000", engine)
-        return [{'label': d, 'value': d} for d in df_dest['nom'].tolist()]
-    except Exception:
-        return [{'label': d, 'value': d} for d in ["Château de Versailles", "Musée du Louvre", "Gare de Marseille Saint-Charles"]]
-
 def get_departements_options():
     try:
         df_dep = pd.read_sql("SELECT DISTINCT departement FROM lieu WHERE departement IS NOT NULL ORDER BY departement", engine)
@@ -202,9 +196,7 @@ def get_departements_options():
             options.append({'label': label, 'value': str(code)})
         return options
     except Exception:
-        return [{'label': f"{k} - {v}", 'value': k} for k, v in [("13", "13 - Bouches-du-Rhône"), ("84", "84 - Vaucluse"), ("75", "75 - Paris")]]
-
-TRAINS = ["OUIGO", "TGV INOUI", "TER", "Transilien", "RER", "Renfe AVE", "Frecciarossa"]
+        return []
 
 custom_spinner = html.Div([
     html.I(className="fa-solid fa-train-subway fa-beat-fade me-3", style={"color": CARMILLON, "fontSize": "2rem"}),
@@ -212,159 +204,39 @@ custom_spinner = html.Div([
 ], className="text-center p-3")
 
 # ==============================================================================
-# 3. MOTEUR ANALYTIQUE ET REQUÊTES SQL
+# 3. MOTEUR ANALYTIQUE (requêtes dans lib/analyse.py)
 # ==============================================================================
-def get_tab2_data(categorie="tous", regions=None, depart=None, arrivee=None, trains=None):
-    try:
-        type_filter = "type NOT IN ('gare', 'arret_bus', 'arret_train')"
-        if categorie == "culture":
-            type_filter = "type IN ('culture', 'tourisme')"
-        elif categorie == "evenement":
-            type_filter = "type IN ('evenement')"
-        elif categorie == "tourisme":
-            type_filter = "type IN ('tourisme')"
+CATEGORIES_SITES = {"culture": "Musée / culture", "tourisme": "Tourisme", "evenement": "Festival / événement"}
+COULEURS_SITES = {"culture": COLORBLIND_PALETTE[0], "tourisme": "#984ea3", "evenement": COLORBLIND_PALETTE[1]}
+KPI_VIDE = "—"          # affiché quand aucun site ne correspond ou que la base est indisponible (jamais de chiffres inventés)
 
-        conditions = [type_filter]
-        if regions:
-            if isinstance(regions, list) and len(regions) > 0:
-                reg_list = "', '".join([str(r) for r in regions])
-                conditions.append(f"departement IN ('{reg_list}')")
-            elif isinstance(regions, str):
-                conditions.append(f"departement = '{regions}'")
+def filtres_analyse(categorie, departements, destination, debut, fin):
+    """Les filtres de l'onglet Analyse, communs aux KPI, aux trois graphes, au plan d'action et au rapport exporté."""
+    if isinstance(departements, str):
+        departements = [departements]
+    return analyse.Filtres(categorie or "tous", list(departements or []), destination or None, debut, fin)
 
-        if arrivee:
-            conditions.append(f"nom = '{arrivee}'")
+def figure_vide(message, layout_shared):
+    """Graphe sans données : le message dit pourquoi, au lieu d'afficher des valeurs factices."""
+    fig = go.Figure()
+    fig.add_annotation(text=message, showarrow=False, x=0.5, y=0.5, xref="paper", yref="paper", font=dict(size=13))
+    fig.update_layout(**layout_shared, xaxis=dict(visible=False), yaxis=dict(visible=False))
+    return fig
 
-        where_clause = " AND ".join(conditions)
+def etiquettes_departements(df):
+    """Départements nommés sur le graphe 1, choisis d'après les données : les 4 IAF les plus bas, les 2 plus hauts, les 2 plus gros volumes."""
+    if len(df) <= 8:
+        return set(df["departement"])
+    return set(pd.concat([df.nsmallest(4, "iaf"), df.nlargest(2, "iaf"), df.nlargest(2, "sites")])["departement"])
 
-        # 1. Graphe 1 : Volume de sites x IAF par Département
-        df_iaf = pd.read_sql(f"""
-            SELECT 
-                departement as "Departement_Code",
-                COUNT(id) as "Nombre_POI",
-                ROUND(100.0 * SUM(CASE WHEN distance_gare_km <= 5 THEN 1 ELSE 0 END) / COUNT(id), 1) as "IAF"
-            FROM lieu
-            WHERE {where_clause} AND departement IS NOT NULL
-            GROUP BY departement
-            HAVING "Nombre_POI" > 5
-        """, engine)
+def nom_departement(code):
+    code = str(code)
+    return DEPARTEMENTS_MAP.get(code.zfill(2) if code.isdigit() else code, code)
 
-        if not df_iaf.empty:
-            df_iaf['Departement_Nom'] = df_iaf['Departement_Code'].apply(
-                lambda x: DEPARTEMENTS_MAP.get(str(x).zfill(2) if str(x).isdigit() and len(str(x)) < 2 else str(x), str(x))
-            )
-        else:
-            raise Exception("Données BDD absentes")
-
-        # 2. Graphe 3 : Répartition des tranches de distance
-        df_distance = pd.read_sql(f"""
-            SELECT 
-                CASE 
-                    WHEN distance_gare_km <= 1.5 THEN '≤ 1,5 km (Pied)'
-                    WHEN distance_gare_km <= 5 THEN '1,5-5 km (Vélo/Bus)'
-                    WHEN distance_gare_km <= 15 THEN '5-15 km (Navette)'
-                    ELSE '> 15 km (Voiture)'
-                END as "Tranche",
-                type as "Categorie",
-                COUNT(id) as "Nombre"
-            FROM lieu 
-            WHERE distance_gare_km IS NOT NULL AND {where_clause}
-            GROUP BY 1, 2
-        """, engine)
-
-        # 3. Graphe 4 : Saisonnalité Événementielle
-        df_saison = pd.read_sql("""
-            SELECT 
-                CASE CAST(STRFTIME('%m', ep.date_debut) AS INTEGER)
-                    WHEN 1 THEN 'Jan' WHEN 2 THEN 'Fév' WHEN 3 THEN 'Mar' WHEN 4 THEN 'Avr'
-                    WHEN 5 THEN 'Mai' WHEN 6 THEN 'Juin' WHEN 7 THEN 'Juil' WHEN 8 THEN 'Août'
-                    WHEN 9 THEN 'Sept' WHEN 10 THEN 'Oct' WHEN 11 THEN 'Nov' ELSE 'Déc'
-                END as "Mois",
-                COUNT(e.id) as "Evenements"
-            FROM evenement e
-            JOIN evenement_periode ep ON ep.evenement_id = e.id
-            GROUP BY "Mois"
-            ORDER BY ep.date_debut ASC
-        """, engine)
-
-        # 4. KPIs Métier
-        stats_kpi = pd.read_sql(f"""
-            SELECT 
-                COUNT(id) as total_sites,
-                SUM(CASE WHEN distance_gare_km <= 5 THEN 1 ELSE 0 END) as sites_5km,
-                SUM(CASE WHEN distance_gare_km > 15 OR distance_gare_km IS NULL THEN 1 ELSE 0 END) as sites_blancs
-            FROM lieu
-            WHERE {where_clause}
-        """, engine).iloc[0]
-
-        total = stats_kpi['total_sites'] or 1
-        sites_5km = stats_kpi['sites_5km'] or 0
-        sites_blancs = stats_kpi['sites_blancs'] or 0
-
-        couverture_pct = round(((total - sites_blancs) / total) * 100, 1)
-        blanches_pct = round((sites_blancs / total) * 100, 1)
-
-        return df_iaf, df_distance, df_saison, f"{couverture_pct} %", f"{sites_5km:,}".replace(",", " "), f"{blanches_pct} %"
-
-    except Exception:
-        mock_iaf = pd.DataFrame({
-            "Departement_Code": ["75", "92", "93", "78", "67", "13", "64", "36", "61", "56", "47", "40", "23", "29", "53", "04", "85", "32", "07"],
-            "Departement_Nom": ["Paris", "Hauts-de-Seine", "Seine-Saint-Denis", "Yvelines", "Bas-Rhin", "Bouches-du-Rhône", "Pyrénées-Atlantiques", "Indre (36)", "Orne (61)", "Morbihan (56)", "Lot-et-Garonne (47)", "Landes (40)", "Creuse (23)", "Finistère (29)", "Mayenne (53)", "Alpes-de-Haute-Provence (04)", "Vendée (85)", "Gers (32)", "Ardèche (07)"],
-            "Nombre_POI": [2500, 1200, 1100, 1500, 1800, 2200, 1300, 290, 340, 620, 410, 530, 280, 780, 310, 390, 680, 320, 450],
-            "IAF": [81.5, 74.0, 73.0, 67.0, 55.0, 47.5, 45.0, 26.1, 22.8, 23.2, 23.1, 22.7, 21.0, 20.3, 19.3, 18.2, 16.8, 15.1, 14.2]
-        })
-        mock_dist = pd.DataFrame({"Tranche": ["≤ 1,5 km (Pied)", "1,5-5 km (Vélo/Bus)"], "Categorie": ["Culture", "Tourisme"], "Nombre": [150, 100]})
-        mock_saison = pd.DataFrame({"Mois": ["Jan", "Fév", "Mar", "Avr", "Mai", "Juin", "Juil", "Août", "Sept", "Oct", "Nov", "Déc"], "Evenements": [15, 8, 9, 12, 30, 80, 150, 110, 25, 20, 10, 8]})
-        return mock_iaf, mock_dist, mock_saison, "82.4 %", "14 530", "17.6 %"
-
-def get_decision_df(regions=None, mode="pires"):
-    try:
-        where_reg = ""
-        if regions:
-            if isinstance(regions, list) and len(regions) > 0:
-                reg_list = "', '".join([str(r) for r in regions])
-                where_reg = f"AND l.departement IN ('{reg_list}')"
-            elif isinstance(regions, str):
-                where_reg = f"AND l.departement = '{regions}'"
-
-        order_by = "DESC" if mode == "pires" else "ASC"
-
-        query = f"""
-            SELECT 
-                l.nom as "SITE TOURISTIQUE",
-                COALESCE(g.nom, 'Gare inconnue') || ' (' || ROUND(l.distance_gare_km, 1) || ' km)' as "GARE LA + PROCHE",
-                CASE 
-                    WHEN l.distance_gare_km <= 1.5 THEN 'Piéton / VLS'
-                    WHEN l.distance_gare_km <= 5 THEN 'Bus / Navette'
-                    ELSE 'Voiture requise'
-                END as "DERNIER KM",
-                CASE 
-                    WHEN l.distance_gare_km > 15 THEN 'Urgente'
-                    WHEN l.distance_gare_km > 5 THEN 'Élevée'
-                    WHEN l.distance_gare_km > 1.5 THEN 'Moyenne'
-                    ELSE 'Excellente'
-                END as "PRIORITÉ"
-            FROM lieu l
-            LEFT JOIN lieu g ON l.gare_proche_id = g.id
-            WHERE l.type NOT IN ('gare', 'arret_bus', 'arret_train') AND l.distance_gare_km IS NOT NULL {where_reg}
-            ORDER BY l.distance_gare_km {order_by}
-            LIMIT 10
-        """
-        df_table = pd.read_sql(query, engine)
-        if df_table.empty:
-            raise Exception("Vide")
-        return df_table
-    except Exception:
-        return pd.DataFrame({
-            "SITE TOURISTIQUE": ["Grotte Chauvet 2 (07)", "Château de Chambord (41)", "Site Antique de Vaison (84)", "Clisson (44)"],
-            "GARE LA + PROCHE": ["Montélimar (38 km)", "Blois (16 km)", "Orange (27 km)", "Gare de Clisson (1.2 km)"],
-            "DERNIER KM": ["Aucun car", "Navette saison", "Voiture requise", "Piéton / Navette"],
-            "PRIORITÉ": ["Urgente", "Moyenne", "Élevée", "Excellente"]
-        })
-
-def generate_decision_table(theme="light", regions=None, mode="pires"):
+def generate_decision_table(theme="light", df_table=None):
     is_dark = theme == "dark"
-    df_table = get_decision_df(regions, mode)
+    if df_table is None or df_table.empty:
+        return html.P("Aucun site ne correspond aux filtres, ou la base de données est indisponible.", className="text-muted fst-italic m-2")
     
     def get_badge(prio):
         if prio == "Urgente":
@@ -391,7 +263,6 @@ STYLE_OUVRIR = {"position": "absolute", "top": "16px", "right": "16px", "zIndex"
                 "boxShadow": "0px 4px 15px rgba(0,0,0,0.3)"}
 init_colors = THEME_COLORS["light"]
 gares_opts = get_gares_options()
-destinations_opts = get_destinations_options()
 departements_opts = get_departements_options()
 hours_opts = options_heures(None, None)
 
@@ -587,36 +458,26 @@ def mise_en_page():
                 dbc.CardBody(className="py-2 px-3", children=[
                     dbc.Row(className="g-2 align-items-end", children=[
                         dbc.Col([
-                            html.Label([html.I(className="fa-solid fa-location-dot me-1"), "Départ"], htmlFor="t2-depart", className="fw-bold mb-1", style={"fontSize": "0.8rem"}),
-                            dcc.Dropdown(options=gares_opts, placeholder="Départ...", searchable=True, id="t2-depart")
-                        ], width=2),
-                    
-                        dbc.Col([
                             html.Label([html.I(className="fa-solid fa-flag-checkered me-1"), "Destination"], htmlFor="t2-arrivee", className="fw-bold mb-1", style={"fontSize": "0.8rem"}),
-                            dcc.Dropdown(options=destinations_opts, placeholder="Destination...", searchable=True, id="t2-arrivee")
-                        ], width=2),
+                            dcc.Dropdown(options=[], placeholder="Tapez un nom de site...", searchable=True, id="t2-arrivee")
+                        ], width=4),
                     
                         dbc.Col([
                             html.Label([html.I(className="fa-solid fa-map me-1"), "Région / Dép."], htmlFor="t2-region", className="fw-bold mb-1", style={"fontSize": "0.8rem"}),
                             dcc.Dropdown(options=departements_opts, placeholder="Toutes...", id="t2-region", multi=True)
-                        ], width=3),
+                        ], width=4),
                     
                         dbc.Col([
-                            html.Label([html.I(className="fa-regular fa-calendar-days me-1"), "Période"], htmlFor="t2-periode-range", className="fw-bold mb-1", style={"fontSize": "0.8rem"}),
+                            html.Label([html.I(className="fa-regular fa-calendar-days me-1"), "Période (événements)"], htmlFor="t2-periode-range", className="fw-bold mb-1", style={"fontSize": "0.8rem"}),
                             html.Div(dcc.DatePickerRange(
                                 id="t2-periode-range",
                                 start_date=date.today(),
-                                end_date=date.today(),
+                                end_date=date.today() + timedelta(days=364),
                                 display_format="DD/MM/YYYY",
                                 start_date_placeholder_text="Du",
                                 end_date_placeholder_text="Au"
                             ), style={"width": "100%"})
-                        ], width=3),
-                    
-                        dbc.Col([
-                            html.Label([html.I(className="fa-solid fa-train me-1"), "Type de train"], htmlFor="t2-train", className="fw-bold mb-1", style={"fontSize": "0.8rem"}),
-                            dcc.Dropdown(options=[{'label': t, 'value': t} for t in TRAINS], placeholder="Tous...", id="t2-train", multi=True)
-                        ], width=2),
+                        ], width=4),
                     ]),
                     dbc.Row(className="mt-2 align-items-center", children=[
                         dbc.Col(
@@ -640,29 +501,29 @@ def mise_en_page():
                     dbc.Row(className="g-3 mb-3", children=[
                         dbc.Col(dbc.Card(id="card-kpi-global-1", className="kpi-card", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "borderTopColor": "#10b981", **transition_style}, children=[dbc.CardBody(className="py-2 px-3", children=[
                             html.Div([
-                                html.H6("Taux de couverture (< 5km)", className="text-uppercase text-muted fw-bold m-0 me-1", style={"fontSize": "0.7rem"}),
+                                html.H6("Sites à 5 km ou moins d'une gare", className="text-uppercase text-muted fw-bold m-0 me-1", style={"fontSize": "0.7rem"}),
                                 html.I(className="fa-solid fa-circle-info text-muted", id="tooltip-kpi-1-target", style={"fontSize": "0.75rem", "cursor": "pointer"}),
-                                dbc.Tooltip("Pourcentage de sites touristiques situés à moins de 5 km d'une gare SNCF.", target="tooltip-kpi-1-target", placement="top")
+                                dbc.Tooltip("Part des sites (culture, tourisme, événements de la période) situés à 5 km ou moins, à vol d'oiseau, de la gare la plus proche.", target="tooltip-kpi-1-target", placement="top")
                             ], className="d-flex align-items-center mb-1"),
-                            html.H4(id="t2-kpi-couverture", children="82.4 %", style={"color": "#10b981", "fontWeight": "bold", "margin": "0"})
+                            html.H4(id="t2-kpi-couverture", children=KPI_VIDE, style={"color": "#10b981", "fontWeight": "bold", "margin": "0"})
                         ])]), width=4),
                     
                         dbc.Col(dbc.Card(id="card-kpi-global-2", className="kpi-card", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "borderTopColor": COLORBLIND_PALETTE[1], **transition_style}, children=[dbc.CardBody(className="py-2 px-3", children=[
                             html.Div([
                                 html.H6("Sites accessibles sans voiture", className="text-uppercase text-muted fw-bold m-0 me-1", style={"fontSize": "0.7rem"}),
                                 html.I(className="fa-solid fa-circle-info text-muted", id="tooltip-kpi-2-target", style={"fontSize": "0.75rem", "cursor": "pointer"}),
-                                dbc.Tooltip("Nombre total de POI directement reliés par la marche, le vélo ou les transports urbains.", target="tooltip-kpi-2-target", placement="top")
+                                dbc.Tooltip("Nombre de sites à 5 km ou moins d'une gare : joignables à pied, à vélo ou en bus depuis le train. Les stations vélo et arrêts ne sont pas comptés comme sites.", target="tooltip-kpi-2-target", placement="top")
                             ], className="d-flex align-items-center mb-1"),
-                            html.H4(id="t2-kpi-sites", children="14 530", style={"color": COLORBLIND_PALETTE[1], "fontWeight": "bold", "margin": "0"})
+                            html.H4(id="t2-kpi-sites", children=KPI_VIDE, style={"color": COLORBLIND_PALETTE[1], "fontWeight": "bold", "margin": "0"})
                         ])]), width=4),
                     
                         dbc.Col(dbc.Card(id="card-kpi-global-3", className="kpi-card", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "borderTopColor": CARMILLON, **transition_style}, children=[dbc.CardBody(className="py-2 px-3", children=[
                             html.Div([
-                                html.H6("Zones Blanches (> 15km gare)", className="text-uppercase text-muted fw-bold m-0 me-1", style={"fontSize": "0.7rem"}),
+                                html.H6("Zones blanches (> 15 km d'une gare)", className="text-uppercase text-muted fw-bold m-0 me-1", style={"fontSize": "0.7rem"}),
                                 html.I(className="fa-solid fa-circle-info text-muted", id="tooltip-kpi-3-target", style={"fontSize": "0.75rem", "cursor": "pointer"}),
-                                dbc.Tooltip("Pourcentage de sites très éloignés des gares nécessitant une navette dédiée ou une voiture.", target="tooltip-kpi-3-target", placement="top")
+                                dbc.Tooltip("Part des sites à plus de 15 km d'une gare, ou sans gare connue : il faut une navette dédiée ou une voiture.", target="tooltip-kpi-3-target", placement="top")
                             ], className="d-flex align-items-center mb-1"),
-                            html.H4(id="t2-kpi-blanches", children="17.6 %", style={"color": CARMILLON, "fontWeight": "bold", "margin": "0"})
+                            html.H4(id="t2-kpi-blanches", children=KPI_VIDE, style={"color": CARMILLON, "fontWeight": "bold", "margin": "0"})
                         ])]), width=4),
                     ]),
 
@@ -733,10 +594,12 @@ app.layout = mise_en_page
 @app.callback(
     Output("download-export", "data"),
     Input("btn-export-report", "n_clicks"),
-    [State("t2-region", "value"), State("filter-categorie", "value"), State("t2-kpi-couverture", "children"), State("t2-kpi-sites", "children"), State("t2-kpi-blanches", "children")],
+    [State("t2-region", "value"), State("filter-categorie", "value"), State("t2-arrivee", "value"),
+     State("t2-periode-range", "start_date"), State("t2-periode-range", "end_date"),
+     State("t2-kpi-couverture", "children"), State("t2-kpi-sites", "children"), State("t2-kpi-blanches", "children")],
     prevent_initial_call=True
 )
-def export_report(n_clicks, regions, categorie, kpi_couv, kpi_sites, kpi_blanc):
+def export_report(n_clicks, regions, categorie, destination, debut, fin, kpi_couv, kpi_sites, kpi_blanc):
     if not n_clicks:
         return dash.no_update
     
@@ -744,9 +607,12 @@ def export_report(n_clicks, regions, categorie, kpi_couv, kpi_sites, kpi_blanc):
     if regions:
         dept_label = ", ".join([DEPARTEMENTS_MAP.get(str(r).zfill(2), str(r)) for r in (regions if isinstance(regions, list) else [regions])])
     
-    df_table = get_decision_df(regions, mode="pires")
+    try:
+        df_table = analyse.plan_action(engine, filtres_analyse(categorie, regions, destination, debut, fin), mode="pires")
+    except Exception:
+        df_table = pd.DataFrame(columns=["SITE TOURISTIQUE", "GARE LA + PROCHE", "DERNIER KM", "PRIORITÉ"])
     table_rows_html = "".join([
-        f"<tr><td style='padding:10px;border-bottom:1px solid #eee;'><b>{r['SITE TOURISTIQUE']}</b></td><td style='padding:10px;border-bottom:1px solid #eee;'>{r['GARE LA + PROCHE']}</td><td style='padding:10px;border-bottom:1px solid #eee;'>{r['DERNIER KM']}</td><td style='padding:10px;border-bottom:1px solid #eee;color:#c71556;'><b>{r['PRIORITÉ']}</b></td></tr>"
+        f"<tr><td style='padding:10px;border-bottom:1px solid #eee;'><b>{escape(r['SITE TOURISTIQUE'])}</b></td><td style='padding:10px;border-bottom:1px solid #eee;'>{escape(r['GARE LA + PROCHE'])}</td><td style='padding:10px;border-bottom:1px solid #eee;'>{r['DERNIER KM']}</td><td style='padding:10px;border-bottom:1px solid #eee;color:#c71556;'><b>{r['PRIORITÉ']}</b></td></tr>"
         for _, r in df_table.iterrows()
     ])
     
@@ -769,13 +635,13 @@ def export_report(n_clicks, regions, categorie, kpi_couv, kpi_sites, kpi_blanc):
     <body>
         <div class="header">
             <h1 style="margin:0; font-size: 1.8rem;">MySNCF Experience — Rapport Métier d'Accessibilité</h1>
-            <p style="margin:8px 0 0 0; opacity: 0.9; font-size: 1rem;">Périmètre : {dept_label} | Édité le : {date.today().strftime('%d/%m/%Y')}</p>
+            <p style="margin:8px 0 0 0; opacity: 0.9; font-size: 1rem;">Périmètre : {escape(dept_label)}{escape(" | Destination : " + destination) if destination else ""}{f" | Événements du {debut[:10]} au {fin[:10]}" if debut and fin else ""} | Édité le : {date.today().strftime('%d/%m/%Y')}</p>
         </div>
         
         <h2 style="font-size: 1.2rem; color: #495057;">Chiffres Clés d'Accessibilité Ferroviaire</h2>
         <div class="kpi-container">
             <div class="kpi-box" style="border-top-color: #10b981;">
-                <div class="kpi-title">Taux de couverture (< 5km)</div>
+                <div class="kpi-title">Sites à 5 km ou moins d'une gare</div>
                 <div class="kpi-value" style="color: #10b981;">{kpi_couv}</div>
             </div>
             <div class="kpi-box" style="border-top-color: #ff7f00;">
@@ -783,7 +649,7 @@ def export_report(n_clicks, regions, categorie, kpi_couv, kpi_sites, kpi_blanc):
                 <div class="kpi-value" style="color: #ff7f00;">{kpi_sites}</div>
             </div>
             <div class="kpi-box" style="border-top-color: #c71556;">
-                <div class="kpi-title">Zones Blanches (> 15km gare)</div>
+                <div class="kpi-title">Zones blanches (> 15 km d'une gare)</div>
                 <div class="kpi-value" style="color: #c71556;">{kpi_blanc}</div>
             </div>
         </div>
@@ -929,13 +795,13 @@ def update_destinations(recherche, categorie, choisi):
      Output("graph-1", "figure"), Output("graph-3", "figure"), Output("graph-4", "figure"),
      Output("table-container", "children"),
      Output("drilldown-text", "children"), Output("btn-reset-drilldown", "style"),
-     Output("card-results", "style")],
+     Output("card-results", "style"), Output("t2-region", "value")],
     [Input("theme-switch", "value"), Input("filter-categorie", "value"), 
      Input("btn-search-t2", "n_clicks"), Input("t2-table-mode", "value"),
      Input("graph-1", "clickData"), Input("btn-reset-drilldown", "n_clicks")],
-    [State("t2-region", "value"), State("t2-depart", "value"), State("t2-arrivee", "value"), State("t2-train", "value")]
+    [State("t2-region", "value"), State("t2-arrivee", "value"), State("t2-periode-range", "start_date"), State("t2-periode-range", "end_date")]
 )
-def update_ui_and_graphs(theme_values, categorie, t2_clicks, table_mode, click_data, reset_clicks, t2_regions, t2_depart, t2_arrivee, t2_train):
+def update_ui_and_graphs(theme_values, categorie, t2_clicks, table_mode, click_data, reset_clicks, t2_regions, t2_arrivee, t2_debut, t2_fin):
     theme = "dark" if theme_values and "dark" in theme_values else "light"
     colors = THEME_COLORS[theme]
     
@@ -957,80 +823,110 @@ def update_ui_and_graphs(theme_values, categorie, t2_clicks, table_mode, click_d
     
     layout_shared = dict(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color=colors["text"]), margin=dict(l=25, r=25, t=35, b=25))
     
-    # Gestion du Drill-down / Brushing & Linking via clic sur Graphe 1
+    # Drill-down via clic sur le graphe 1 : le département cliqué devient le filtre de tout l'onglet (et s'affiche dans « Région / Dép. »)
     selected_regions = t2_regions
     triggered_id = ctx.triggered_id
     
     if triggered_id == "btn-reset-drilldown":
         selected_regions = None
     elif triggered_id == "graph-1" and click_data and "points" in click_data:
-        clicked_custom = click_data["points"][0].get("customdata", [None])[0]
-        if clicked_custom:
-            code_dept = str(clicked_custom).split(" - ")[0].strip()
-            selected_regions = [code_dept]
+        clicked_code = click_data["points"][0].get("customdata", [None])[0]
+        if clicked_code:
+            selected_regions = [str(clicked_code)]
 
     # Status du filtre actif (Signifiant visuel Roll-up)
     if selected_regions:
-        label_reg = ", ".join([DEPARTEMENTS_MAP.get(str(r).zfill(2), str(r)) for r in (selected_regions if isinstance(selected_regions, list) else [selected_regions])])
+        label_reg = ", ".join([nom_departement(r) for r in (selected_regions if isinstance(selected_regions, list) else [selected_regions])])
         drilldown_text = f"🎯 Filtre actif : {label_reg}"
         btn_reset_style = {"display": "inline-block", "fontSize": "0.75rem", "padding": "2px 8px"}
     else:
         drilldown_text = "💡 Cliquez sur un point du Graphe 1 pour zoomer (Drill-down)"
         btn_reset_style = {"display": "none", "fontSize": "0.75rem", "padding": "2px 8px"}
 
-    df_iaf, df_distance, df_saison, kpi_couv, kpi_sites, kpi_blanc = get_tab2_data(categorie, selected_regions, t2_depart, t2_arrivee, t2_train)
+    filtres = filtres_analyse(categorie, selected_regions, t2_arrivee, t2_debut, t2_fin)
+    try:
+        d = analyse.donnees(engine, filtres)
+        df_table = analyse.plan_action(engine, filtres, mode=table_mode)
+        vide = "Aucun site ne correspond à ces filtres"
+    except Exception:
+        d, df_table = None, None
+        vide = "Base de données indisponible : lancez src/initialize.py"
+    kpi = d["kpi"] if d else None
+    kpi_couv = f"{kpi['part_sans_voiture']} %" if kpi else KPI_VIDE
+    kpi_sites = f"{kpi['sans_voiture']:,}".replace(",", " ") if kpi else KPI_VIDE
+    kpi_blanc = f"{kpi['part_zones_blanches']} %" if kpi else KPI_VIDE
     
     # --------------------------------------------------------------------------
     # GRAPHE 1 : Scatter Plot (Pleine Hauteur Gauche)
     # --------------------------------------------------------------------------
-    extrema_codes = ["75", "92", "93", "78", "07", "32", "04", "23"]
-    df_iaf['Label_Visible'] = df_iaf.apply(
-        lambda r: r['Departement_Nom'] if any(c in str(r['Departement_Code']) for c in extrema_codes) else "", axis=1
-    )
-
-    fig1 = px.scatter(
-        df_iaf, x="Nombre_POI", y="IAF", text="Label_Visible", color="IAF",
-        custom_data=["Departement_Nom"],
-        color_continuous_scale=["#b91c1c", "#f59e0b", "#10b981"],
-        log_x=True,
-        title="<b>Volume de sites × accessibilité ferroviaire par département</b>",
-        labels={"Nombre_POI": "nombre de sites (log)", "IAF": "IAF"}
-    )
-    fig1.update_traces(
-        marker=dict(size=12, opacity=0.85, line=dict(width=1, color="DarkSlateGrey")),
-        textposition='top center',
-        hovertemplate="<b>%{customdata[0]}</b><br>Sites : %{x}<br>Indice IAF : %{y}<extra></extra>"
-    )
-    fig1.add_hline(y=38, line_dash="dash", line_color="#4b5563", annotation_text="France : 38", annotation_position="bottom right")
-    fig1.update_layout(
-        **layout_shared, showlegend=False, coloraxis_showscale=False,
-        clickmode='event+select'
-    )
+    titre1 = "<b>Volume de sites × accessibilité ferroviaire par département</b>"
+    df_iaf = d["departements"] if d else pd.DataFrame()
+    if df_iaf.empty:
+        fig1 = figure_vide(vide, layout_shared)
+        fig1.update_layout(title=titre1)
+    else:
+        df_iaf = df_iaf.sort_values("sites").reset_index(drop=True)
+        df_iaf["nom"] = df_iaf["departement"].map(nom_departement)
+        nommes = etiquettes_departements(df_iaf)
+        df_iaf["etiquette"] = [n.split(" - ", 1)[-1] if c in nommes else "" for c, n in zip(df_iaf["departement"], df_iaf["nom"])]
+        fig1 = px.scatter(
+            df_iaf, x="sites", y="iaf", text="etiquette", color="iaf",
+            custom_data=["departement", "nom"],
+            color_continuous_scale="Viridis",          # séquentielle et lisible par les daltoniens (pas de rouge-vert)
+            log_x=True,
+            title=titre1,
+            labels={"sites": "nombre de sites (log)", "iaf": "IAF (0-100)"}
+        )
+        fig1.update_traces(
+            marker=dict(size=12, opacity=0.85, line=dict(width=1, color="DarkSlateGrey")),
+            textposition=["top center" if i % 2 else "bottom center" for i in range(len(df_iaf))],   # en alternance, pour que les noms voisins se chevauchent moins
+            hovertemplate="<b>%{customdata[1]}</b><br>Sites : %{x}<br>IAF : %{y}<extra></extra>"
+        )
+        if d["iaf_france"] is not None:
+            fig1.add_hline(y=d["iaf_france"], line_dash="dash", line_color="#4b5563", annotation_text=f"France : {d['iaf_france']:.0f}", annotation_position="bottom right")
+        fig1.update_layout(
+            **layout_shared, showlegend=False, coloraxis_showscale=False,
+            clickmode='event+select'
+        )
 
     # --------------------------------------------------------------------------
     # GRAPHE 3 : Répartition par Tranche de Distance (Haut Droite)
     # --------------------------------------------------------------------------
-    fig3 = px.bar(
-        df_distance, x="Tranche", y="Nombre", color="Categorie",
-        color_discrete_sequence=COLORBLIND_PALETTE,
-        title="<b>Répartition des sites par tranche de distance</b>",
-        labels={"Tranche": "Transport recommandé", "Nombre": "Sites"},
-        category_orders={"Tranche": ["≤ 1,5 km (Pied)", "1,5-5 km (Vélo/Bus)", "5-15 km (Navette)", "> 15 km (Voiture)"]}
-    )
-    fig3.update_traces(hovertemplate="Catégorie : %{fullData.name}<br>Nombre : %{y}<extra></extra>")
-    fig3.update_layout(**layout_shared, barmode="stack", yaxis_rangemode="tozero")
+    titre3 = "<b>Répartition des sites par tranche de distance</b>"
+    df_distance = d["distances"] if d else pd.DataFrame()
+    if df_distance.empty:
+        fig3 = figure_vide(vide, layout_shared)
+        fig3.update_layout(title=titre3)
+    else:
+        df_distance = df_distance.assign(categorie=df_distance["type"].map(CATEGORIES_SITES))
+        fig3 = px.bar(
+            df_distance, x="tranche", y="sites", color="categorie",
+            color_discrete_map={CATEGORIES_SITES[t]: c for t, c in COULEURS_SITES.items()},
+            title=titre3,
+            labels={"tranche": "Transport recommandé", "sites": "Sites", "categorie": "Catégorie"},
+            category_orders={"tranche": analyse.TRANCHES, "categorie": list(CATEGORIES_SITES.values())}
+        )
+        fig3.update_traces(hovertemplate="Catégorie : %{fullData.name}<br>Nombre : %{y}<extra></extra>")
+        fig3.update_layout(**layout_shared, barmode="stack", yaxis_rangemode="tozero")
 
     # --------------------------------------------------------------------------
     # GRAPHE 4 : Saisonnalité Événementielle (Bas Droite)
     # --------------------------------------------------------------------------
-    fig4 = px.area(
-        df_saison, x="Mois", y="Evenements", markers=True,
-        color_discrete_sequence=[COLORBLIND_PALETTE[1]],
-        title="<b>Saisonnalité de la demande événementielle par mois</b>",
-        labels={"Mois": "Mois", "Evenements": "Événements"}
-    )
-    fig4.update_traces(hovertemplate="Mois : %{x}<br>Événements : %{y}<extra></extra>")
-    fig4.update_layout(**layout_shared, yaxis_rangemode="tozero")
+    titre4 = "<b>Événements qui commencent chaque mois de la période</b>"
+    df_saison = d["saison"] if d else pd.DataFrame()
+    if df_saison.empty:
+        fig4 = figure_vide("Pas d'événement dans la catégorie choisie" if d and categorie in ("culture", "tourisme") else
+                           "Aucun événement pour ces filtres" if d else vide, layout_shared)
+        fig4.update_layout(title=titre4)
+    else:
+        fig4 = px.area(
+            df_saison, x="mois", y="evenements", markers=True,
+            color_discrete_sequence=[COLORBLIND_PALETTE[1]],
+            title=titre4,
+            labels={"mois": "Mois", "evenements": "Événements"}
+        )
+        fig4.update_traces(hovertemplate="Mois : %{x}<br>Événements : %{y}<extra></extra>")
+        fig4.update_layout(**layout_shared, yaxis_rangemode="tozero", xaxis_type="category")
 
     return (
         {"backgroundColor": colors["bg"], "color": colors["text"], "minHeight": "100vh", "padding": "12px 20px", **transition_style},
@@ -1043,9 +939,26 @@ def update_ui_and_graphs(theme_values, categorie, t2_clicks, table_mode, click_d
         card_st, card_st, card_st, card_st,
         colors["tiles"], colors["map_class"],
         kpi_couv, kpi_sites, kpi_blanc,
-        fig1, fig3, fig4, generate_decision_table(theme, selected_regions, mode=table_mode),
-        drilldown_text, btn_reset_style, card_iti
+        fig1, fig3, fig4, generate_decision_table(theme, df_table),
+        drilldown_text, btn_reset_style, card_iti, selected_regions
     )
+
+
+@app.callback(
+    Output("t2-arrivee", "options"),
+    Input("t2-arrivee", "search_value"),
+    State("t2-arrivee", "value")
+)
+def chercher_sites_analyse(recherche, choisi):
+    """Le filtre Destination cherche dans tous les sites au fil de la frappe (2 lettres minimum) ; le site choisi reste dans la liste.
+    Comme pour l'onglet Itinéraire (_option_destination), chaque option reçoit la saisie comme texte de recherche : le tri est déjà fait côté serveur."""
+    try:
+        noms = analyse.chercher_sites(engine, recherche)
+    except Exception:
+        noms = []
+    if choisi and choisi not in noms:
+        noms = [choisi] + noms
+    return [{"label": n, "value": n, "search": recherche or n} for n in noms]
 
 POI_COULEURS = {"culture": COLORBLIND_PALETTE[0], "tourisme": "#984ea3", "evenement": COLORBLIND_PALETTE[1]}
 POI_LIBELLES = {"culture": "Musée / culture", "tourisme": "Tourisme", "evenement": "Festival / événement"}
