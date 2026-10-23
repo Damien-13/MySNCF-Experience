@@ -5,7 +5,7 @@ pour l'onglet Itinéraire ; les trois indicateurs pour l'onglet Analyse. Les phr
 
 Usage :
     resume_itineraire(r, {"sens": "aller", "index": 0})      # r : le résultat de lib.itineraire.rechercher(), tel que le garde le dashboard (store-resultat)
-    resume_analyse("87,8 %", "278 207", "12,2 %")
+    resume_analyse("52,1 %", "127 688", "17,1 %")
 """
 import re
 from datetime import datetime
@@ -108,8 +108,10 @@ def resume_itineraire(r, selection=None):
 
 def resume_analyse(couverture, sites, blanches):
     """Résumé de l'onglet Analyse : les trois indicateurs, tels qu'affichés (textes)."""
+    if any(str(v).strip() in ("", "—") for v in (couverture, sites, blanches)):        # le tiret du dashboard : aucun site ou base indisponible
+        return "Analyse de la couverture ferroviaire. Aucun chiffre disponible pour ces filtres."
     couverture, blanches = (str(v).replace(".", ",") for v in (couverture, blanches))     # virgule décimale : la voix française dit « virgule », pas « point »
     return ("Analyse de la couverture ferroviaire. "
-            f"Taux de couverture à moins de 5 kilomètres d'une gare : {couverture}. "
+            f"Sites à 5 kilomètres ou moins d'une gare : {couverture}. "
             f"Sites accessibles sans voiture : {sites}. "
             f"Zones blanches, à plus de 15 kilomètres d'une gare : {blanches}.")

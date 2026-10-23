@@ -57,3 +57,8 @@
 .theme-sombre .text-muted { color: #aab3c2 !important; }
 .theme-sombre .btn-outline-dark { color: #f1f1f1; border-color: rgba(255, 255, 255, 0.6); }
 .theme-sombre .btn-outline-dark:hover { color: #11151c; background-color: #f1f1f1; border-color: #f1f1f1; }
+
+/* « Réduire les animations » (réglage du système) : plus d'icônes qui pulsent ni de transitions sur toute la page ; les trains, eux, avancent par pas (trains.js). */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}

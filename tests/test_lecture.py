@@ -76,7 +76,8 @@ def test_resume_sans_recherche_ou_avec_message():
 
 
 def test_resume_de_l_analyse():
-    texte = lecture.resume_analyse("87,8 %", "278 207", "12,2 %")
-    assert "87,8 %" in texte and "278 207" in texte and "12,2 %" in texte and "15 kilomètres" in texte
-    brut = lecture.resume_analyse("87.8 %", "278 207", "12.2 %")                        # les indicateurs affichés ont un point décimal : la voix dit « virgule »
-    assert "87,8 %" in brut and "12,2 %" in brut and "87.8" not in brut
+    texte = lecture.resume_analyse("52,1 %", "127 688", "17,1 %")
+    assert "52,1 %" in texte and "127 688" in texte and "17,1 %" in texte and "15 kilomètres" in texte
+    brut = lecture.resume_analyse("52.1 %", "127 688", "17.1 %")                        # les indicateurs affichés ont un point décimal : la voix dit « virgule »
+    assert "52,1 %" in brut and "17,1 %" in brut and "52.1" not in brut
+    assert "Aucun chiffre" in lecture.resume_analyse("—", "—", "—")                       # aucun site ou base indisponible : on ne lit pas de tirets

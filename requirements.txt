@@ -25,6 +25,9 @@ pyshp>=2.3
 shapely>=2.0
 pillow>=10
 
+# Lignes de bus et routes d'OpenStreetMap (src/transformation/lignes_bus.py, routes.py)
+osmium>=3.7
+
 # Dashboard
 dash==4.4.1
 plotly>=6.5.0
