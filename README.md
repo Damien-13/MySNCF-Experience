@@ -25,7 +25,7 @@ Un dashboard en deux onglets, construit sur les données ouvertes (SNCF, DATAtou
 ### 1. Prérequis
 
 - Python 3.11 ou plus récent, et Git.
-- Environ 20 Go d'espace disque libre, dont environ 9 Go pour la base de données et 5 Go pour l'extrait OpenStreetMap de la France (tracé des cars), une fois les données téléchargées.
+- Environ 20 Go d'espace disque libre, dont environ 10 Go pour la base de données et 5 Go pour l'extrait OpenStreetMap de la France (tracé des cars), une fois les données téléchargées.
 
 ### 2. Récupérer le projet
 
@@ -106,6 +106,7 @@ MySNCF-Experience/
 │   │   ├── models.py                               Tables de la base (SQLAlchemy)
 │   │   ├── connection.py                           Connexion (DATABASE_URL du .env)
 │   │   └── write.py                                Écriture en transaction
+│   ├── analyse.py                                  Chiffres de l'onglet Analyse (indicateurs, IAF, graphes, plan d'action)
 │   ├── itineraire.py                               Logique de l'onglet Itinéraire (recherche, trajets, dernier kilomètre)
 │   ├── navitia.py                                  API SNCF : gares et itinéraires
 │   ├── reseau_ferre.py                             Réseau des voies et plus court chemin
@@ -218,6 +219,21 @@ l'ajouter à `ETAPES` dans `transformation.py`. Relançable sans risque : les do
 
 - **API SNCF** (`lib/navitia.py`) : itinéraires en train, retards et émissions de CO₂, avec `NAVITIA_TOKEN`. La couverture ne va qu'environ 30 jours en avant.
 - **Vélos en libre-service** (`lib/flux.py`) : stations des variables `FLUX_<NOM>_URL` (GBFS v2 et v3). Un flux en panne ne bloque pas les autres.
+
+## Indicateurs de l'onglet Analyse
+
+Calculés par `lib/analyse.py`, avec les mêmes filtres pour les trois indicateurs, les trois graphes, le plan d'action et le rapport exporté.
+
+- **Sites** : culture, tourisme et événements. Les gares, arrêts et stations vélo sont des moyens d'y aller, pas des sites.
+  Un événement ne compte que s'il a une période qui croise la **Période** choisie (par défaut, les 12 prochains mois).
+- **Sites à 5 km ou moins d'une gare** : leur part et leur nombre (« accessibles sans voiture » : à pied, à vélo ou en bus).
+- **Zones blanches** : part des sites à plus de 15 km d'une gare, ou sans gare connue.
+- **IAF (Indice d'Accessibilité Ferroviaire, 0-100)** : même définition que l'EDA, moyenne pondérée des sites selon leur distance
+  à vol d'oiseau à la gare la plus proche (≤ 1 km = 1, 1-5 km = 0,5, 5-25 km = 0,1, au-delà = 0). La ligne « France » est calculée
+  avec les mêmes filtres, hors département et destination.
+- **Saisonnalité** : événements qui commencent chaque mois de la période, dans les départements et la destination choisis.
+- Cliquer sur un département du graphe 1 le met dans le filtre « Région / Dép. » et filtre tout l'onglet.
+- Base absente ou aucun site pour ces filtres : l'onglet affiche « — » et un message, jamais de chiffres inventés.
 
 ## Lire les horaires (trains, bus, tram…)
 

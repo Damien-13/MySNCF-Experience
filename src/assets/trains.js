@@ -19,6 +19,9 @@
  *
  * Clic sur un train (une zone de clic plus large que l'image, pour viser un train vu de loin) : fenêtre d'informations (vitesse, distance restante).
  * Le bouton « Recentrer » (et le lancement de la simulation) fait comme un clic sur le train du trajet choisi, en temps réel ou simulé : zoom, fenêtre, caméra qui suit.
+ *
+ * Réglage « réduire les animations » du système (prefers-reduced-motion) : les trains avancent par pas d'une seconde au lieu de glisser,
+ * et la caméra saute au train au lieu de voler jusqu'à lui.
  */
 (function () {
   const VITESSE_SIM = 120;           // 1 seconde réelle = 2 minutes de trajet, comme lib/suivi.py
@@ -27,6 +30,7 @@
   const LONGUEUR_MIN_TOUS_PX = 6;    // plancher beaucoup plus petit pour les trains « tous réseaux » : de petits repères en dézoomant, sans encombrer la carte (0 = échelle exacte, ils disparaissent)
   const LARGEUR_MAX_PX = 700;
   const RAPPORT_BUS_MAX = 8;          // une image plus trapue qu'un rapport de 8 (largeur / hauteur) est un bus : on ne l'élargit pas
+  const PAS_REDUIT_MS = 1000;        // avec « réduire les animations » : une position par seconde, comme le serveur
   const ETIREMENT = 1.8;             // les trains vus du dessus sont très fins : on les élargit un peu pour qu'on les reconnaisse (moins pour un train déjà trapu, comme le TER Zou)
   const ZOOM_SUIVI = 12;             // niveau de zoom atteint en cliquant sur un train (on ne dézoome jamais : si on est déjà plus près, on reste)
   const LISSAGE_CAP_M = 60;          // le cap du train est calculé sur ± cette distance : les virages tournent progressivement
@@ -193,7 +197,9 @@
   /** Vol animé vers un point, placé à l'endroit voulu de l'écran (voir decalageCible). */
   function allerA(ll, zoom) {
     const carte = S.carte;
-    carte.flyTo(carte.unproject(carte.project(ll, zoom).subtract(decalageCible(carte)), zoom), zoom, { duration: 0.8 });
+    const cible = carte.unproject(carte.project(ll, zoom).subtract(decalageCible(carte)), zoom);
+    if (mouvementReduit()) carte.setView(cible, zoom, { animate: false });
+    else carte.flyTo(cible, zoom, { duration: 0.8 });
   }
 
   function contenu(e, t) {
@@ -234,8 +240,16 @@
   }
 
   // ---------- Boucle d'animation ----------
-  function image() {
+  function mouvementReduit() {
+    return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  }
+
+  function image(instant) {
     S.trame = requestAnimationFrame(image);
+    if (mouvementReduit()) {
+      if (instant - (S.derniereImage || 0) < PAS_REDUIT_MS) return;
+      S.derniereImage = instant;
+    }
     const carte = trouverCarte();
     if (!carte) return;
     const t = maintenant();
