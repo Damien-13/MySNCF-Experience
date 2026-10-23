@@ -25,7 +25,7 @@ Un dashboard en deux onglets, construit sur les données ouvertes (SNCF, DATAtou
 ### 1. Prérequis
 
 - Python 3.11 ou plus récent, et Git.
-- Environ 20 Go d'espace disque libre, dont environ 9 Go pour la base de données et 5 Go pour l'extrait OpenStreetMap de la France (tracé des cars), une fois les données téléchargées.
+- Environ 20 Go d'espace disque libre, dont environ 10 Go pour la base de données et 5 Go pour l'extrait OpenStreetMap de la France (tracé des cars), une fois les données téléchargées.
 
 ### 2. Récupérer le projet
 
