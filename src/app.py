@@ -229,6 +229,14 @@ def etiquettes_departements(df):
         return set(df["departement"])
     return set(pd.concat([df.nsmallest(4, "iaf"), df.nlargest(2, "iaf"), df.nlargest(2, "sites")])["departement"])
 
+def positions_etiquettes(df, nommes):
+    """Position du nom de chaque point du graphe 1 : à gauche pour les plus gros volumes (sinon le nom sort du graphe),
+    et en tournant autour du point pour les autres, par IAF croissant, pour que des départements voisins ne se chevauchent pas."""
+    autour = ["bottom center", "middle right", "top center", "middle left"]
+    droite = df["sites"].quantile(0.9)
+    rangs = {c: i for i, c in enumerate(df[df["departement"].isin(nommes)].sort_values("iaf")["departement"])}
+    return ["middle left" if s >= droite else autour[rangs.get(c, 0) % len(autour)] for c, s in zip(df["departement"], df["sites"])]
+
 def nom_departement(code):
     code = str(code)
     return DEPARTEMENTS_MAP.get(code.zfill(2) if code.isdigit() else code, code)
@@ -879,7 +887,7 @@ def update_ui_and_graphs(theme_values, categorie, t2_clicks, table_mode, click_d
         )
         fig1.update_traces(
             marker=dict(size=12, opacity=0.85, line=dict(width=1, color="DarkSlateGrey")),
-            textposition=["top center" if i % 2 else "bottom center" for i in range(len(df_iaf))],   # en alternance, pour que les noms voisins se chevauchent moins
+            textposition=positions_etiquettes(df_iaf, nommes),
             hovertemplate="<b>%{customdata[1]}</b><br>Sites : %{x}<br>IAF : %{y}<extra></extra>"
         )
         if d["iaf_france"] is not None:
