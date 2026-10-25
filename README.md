@@ -108,6 +108,7 @@ MySNCF-Experience/
 │   │   └── write.py                                Écriture en transaction
 │   ├── analyse.py                                  Chiffres de l'onglet Analyse (indicateurs, IAF, graphes, plan d'action)
 │   ├── itineraire.py                               Logique de l'onglet Itinéraire (recherche, trajets, dernier kilomètre)
+│   ├── acheminement.py                             Gare d'une ville, gare relais (Aix → Aix TGV) et car ou voiture pour la rejoindre
 │   ├── navitia.py                                  API SNCF : gares et itinéraires
 │   ├── reseau_ferre.py                             Réseau des voies et plus court chemin
 │   ├── trace_bus.py · reseau_routier.py            Tracé d'un car sur la route de sa ligne, sinon arrêt par arrêt
@@ -219,6 +220,21 @@ l'ajouter à `ETAPES` dans `transformation.py`. Relançable sans risque : les do
 
 - **API SNCF** (`lib/navitia.py`) : itinéraires en train, retards et émissions de CO₂, avec `NAVITIA_TOKEN`. La couverture ne va qu'environ 30 jours en avant.
 - **Vélos en libre-service** (`lib/flux.py`) : stations des variables `FLUX_<NOM>_URL` (GBFS v2 et v3). Un flux en panne ne bloque pas les autres.
+
+## Recherche d'itinéraire
+
+- **Destination** : un lieu (on vise sa gare la plus proche) ou une ville (on vise la gare de la ville où arrivent des trains directs depuis le départ,
+  sinon la plus desservie : Aix-en-Provence → Paris arrive à Paris Gare de Lyon).
+- **Gare relais** : si la gare de départ n'a pas de train direct vers l'arrivée mais qu'une gare proche en a (Aix-en-Provence → Aix-en-Provence TGV),
+  une option de plus prend le car jusqu'à cette gare (horaires des réseaux de bus de la base, le dernier car qui arrive au moins 10 min avant le train),
+  sinon la voiture (durée estimée), puis le train le plus direct (Aix TGV → Paris sans repasser par Marseille).
+- **Ordre des options**, comme Waze : l'heure d'arrivée, avec une pénalité de 20 minutes par correspondance (un train de plus, c'est un billet de plus)
+  et d'une minute par kilomètre qui éloigne de la destination. Un détour qui ne fait gagner que quelques minutes passe derrière ;
+  étiquettes « Le plus rapide », « Le plus écologique », « Le moins de correspondances », « Le moins de distance ».
+- **Détail d'une option** : chaque étape avec son service et son numéro (« TGV INOUI 6120 », « TER ZOU ! 880139 », « RER C », « Bus AIX - AEROPORT »),
+  ses horaires, ses gares de départ et d'arrivée et son retard annoncé, puis la fin du trajet jusqu'au lieu.
+- Limite : l'API SNCF ne connaît ni le métro ni les correspondances à pied entre gares non déclarées (Gare de Lyon → Austerlitz) : dans Paris,
+  elle enchaîne les RER.
 
 ## Indicateurs de l'onglet Analyse
 

@@ -1,7 +1,7 @@
 """Vérifie la logique de l'onglet Itinéraire voyageur (lib/itineraire.py) sur une base SQLite temporaire, l'API Navitia étant simulée."""
 import sys
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -49,11 +49,17 @@ def _trajet(de, vers):
             "sections": [{"type": "public_transport", "de_lonlat": de, "vers_lonlat": vers, "ligne": "TGV INOUI", "numero": "6101"}]}
 
 
+def _lieux(options):
+    """Les options du menu sans les villes (« Testville · ville » vient en tête quand on tape « test »)."""
+    return [o for o in options if o["type"] != "ville"]
+
+
 def test_options_gares_et_recherche_de_destinations(engine):
     assert [o["label"] for o in itineraire.options_gares(engine)] == ["Gare A", "Gare B"]
-    assert [o["value"] for o in itineraire.chercher_destinations("test", "culture", engine)] == [10]            # le festival n'est pas de la culture
-    assert [o["value"] for o in itineraire.chercher_destinations("test", "evenement", engine)] == [11]
-    assert [o["label"] for o in itineraire.chercher_destinations("Château", "tous", engine)] == ["Château de Test (Testville)"]
+    assert itineraire.chercher_destinations("test", "culture", engine)[0]["value"] == "ville:Testville|"
+    assert [o["value"] for o in _lieux(itineraire.chercher_destinations("test", "culture", engine))] == [10]            # le festival n'est pas de la culture
+    assert [o["value"] for o in _lieux(itineraire.chercher_destinations("test", "evenement", engine))] == [11]
+    assert [o["label"] for o in _lieux(itineraire.chercher_destinations("Château", "tous", engine))] == ["Château de Test (Testville)"]
     assert 12 in [o["value"] for o in itineraire.chercher_destinations("", "culture", engine, inclure=12, limite=1)]   # le lieu déjà choisi reste dans la liste
 
 
@@ -163,7 +169,11 @@ def test_etiquettes_des_options_comme_waze():
     assert itineraire.etiquettes_trajets(trajets[:1]) == [[]]                                  # une seule option : rien à comparer
     exaequo = [{"duree_s": 3600, "co2_g": None, "correspondances": 2}, {"duree_s": 3600, "co2_g": None, "correspondances": 0}, {"duree_s": 4000, "co2_g": None, "correspondances": 0}]
     noms = [[e[0] for e in lot] for lot in itineraire.etiquettes_trajets(exaequo)]
-    assert noms == [["Le plus rapide"], ["Le plus rapide", "Le moins de correspondances"], ["Le moins de correspondances"]]     # ex æquo : les deux l'ont ; CO₂ inconnu : ignoré
+    assert noms == [[], ["Le plus rapide", "Le moins de correspondances"], []]     # ex æquo : une seule option l'a (moins de correspondances, puis la plus courte) ; CO₂ inconnu : ignoré
+    ecolos = [{"duree_s": 3600, "co2_g": 1500, "correspondances": 1}, {"duree_s": 4000, "co2_g": 1500, "correspondances": 0},
+              {"duree_s": 3000, "co2_g": 1500, "correspondances": 0}, {"duree_s": 3000, "co2_g": 2000, "correspondances": 2}]
+    noms = [[e[0] for e in lot] for lot in itineraire.etiquettes_trajets(ecolos)]
+    assert sum("Le plus écologique" in n for n in noms) == 1 and "Le plus écologique" in noms[2]           # même CO₂ : la moins de correspondances, puis la plus courte
 
 
 def test_filtre_culture_ne_garde_que_la_culture(engine):
@@ -174,7 +184,8 @@ def test_filtre_culture_ne_garde_que_la_culture(engine):
 def test_rechercher_assemble_tout(engine, monkeypatch):
     appels = []
     monkeypatch.setattr(navitia, "itineraires", lambda a, b, quand=None, nombre=3: appels.append((a, b)) or [_trajet((2.0, 48.0), (2.2, 48.0))])
-    r = itineraire.rechercher(1, 10, quand=datetime(2026, 10, 12, 8), retour=datetime(2026, 10, 14, 18), engine=engine)
+    demain = datetime.now().replace(hour=8, minute=0, second=0, microsecond=0) + timedelta(days=1)       # dans la fenêtre de l'API, quel que soit le jour du test
+    r = itineraire.rechercher(1, 10, quand=demain, retour=demain + timedelta(days=2), engine=engine)
     assert appels == [("stop_area:SNCF:87000001", "stop_area:SNCF:87000002"), ("stop_area:SNCF:87000002", "stop_area:SNCF:87000001")]
     assert r["gare_arrivee"]["nom"] == "Gare B" and r["distance_km"] == 1.0 and r["faisable"] is True
     assert r["dernier_km"][0] == "Marche à pied" and r["alentours"] == {"velo": 1, "bus": 1}

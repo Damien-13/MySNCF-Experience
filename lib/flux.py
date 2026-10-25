@@ -76,6 +76,7 @@ def _date(valeur):
     nombres = nombres.where(nombres < 1e11, nombres / 1000)          # millisecondes → secondes
     depuis_nombre = pd.to_datetime(nombres, unit="s", utc=True, errors="coerce")
     depuis_texte = pd.to_datetime(texte.where(nombres.isna() & ~pd.to_numeric(texte, errors="coerce").notna()), utc=True, errors="coerce")
+    depuis_texte = depuis_texte.where(depuis_texte >= pd.Timestamp("2001-01-01", tz="UTC"))     # pandas 3 lit l'an 1 (« 0001-01-01 ») : donnée fausse aussi
     return depuis_nombre.fillna(depuis_texte)
 
 

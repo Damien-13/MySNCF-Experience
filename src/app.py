@@ -13,6 +13,11 @@ if str(ROOT) not in sys.path:
 import base64
 from html import escape
 from datetime import date
+import requests
+from dotenv import load_dotenv
+
+# Charge les variables du fichier .env (dont la clé OpenRouter du rapport exporté)
+load_dotenv()
 
 # ==============================================================================
 # 1. DICTIONNAIRE DES DÉPARTEMENTS
@@ -79,7 +84,7 @@ from datetime import datetime, timedelta
 from lib.db.connection import get_engine
 from flask import Response, abort
 from lib import analyse, circulations, lecture, sprites, suivi
-from lib.itineraire import FENETRE_API_JOURS, options_heures, retour_minimum, RAYON_POI_KM, chercher_destinations, etiquettes_trajets, options_gares, quand_depuis, rechercher, style_dernier_km, tracer_trajet
+from lib.itineraire import FENETRE_API_JOURS, options_heures, retour_minimum, RAYON_POI_KM, chercher_destinations, etiquettes_trajets, nom_gare, options_gares, quand_depuis, rechercher, style_dernier_km, tracer_trajet
 from lib.reseau_ferre import charger_reseau
 
 # ==============================================================================
@@ -198,10 +203,15 @@ def get_departements_options():
     except Exception:
         return []
 
-custom_spinner = html.Div([
-    html.I(className="fa-solid fa-train-subway fa-beat-fade me-3", style={"color": CARMILLON, "fontSize": "2rem"}),
-    html.Div("Analyse SQL en cours...", className="mt-2 text-muted fw-bold")
-], className="text-center p-3")
+def spinner(texte):
+    """Indicateur de chargement : le train au milieu, le texte juste en dessous (sur toute la largeur de la zone qui charge)."""
+    return html.Div([
+        html.I(className="fa-solid fa-train-subway fa-beat-fade", style={"color": CARMILLON, "fontSize": "2rem"}),
+        html.Div(texte, className="mt-2 text-muted fw-bold")
+    ], className="d-flex flex-column align-items-center justify-content-center text-center p-3", style={"width": "100%"})
+
+custom_spinner = spinner("Recherche en cours...")
+spinner_analyse = spinner("Calcul en cours...")
 
 # ==============================================================================
 # 3. MOTEUR ANALYTIQUE (requêtes dans lib/analyse.py)
@@ -260,12 +270,63 @@ def generate_decision_table(theme="light", df_table=None):
     table = dbc.Table([html.Thead(html.Tr([html.Th(col) for col in df_table.columns])), html.Tbody(rows)], striped=True, bordered=False, hover=True, color="dark" if is_dark else "light")
     return table
 
+def generate_ai_analysis_summary(dept_label, kpi_couv, kpi_sites, kpi_blanc, df_table):
+    """Synthèse du rapport exporté rédigée par l'IA (OpenRouter / GPT-4o) ; sans clé ou en cas d'erreur, synthèse construite à partir des KPI."""
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if df_table is not None and not df_table.empty:
+        site, gare = df_table.iloc[0]["SITE TOURISTIQUE"], df_table.iloc[0]["GARE LA + PROCHE"]
+    else:
+        site, gare = None, None
+
+    recommandation = (f"Prioriser l'instauration de navettes estivales intermodales sur les sites classés en priorité 'Urgente' (ex: <i>{escape(site)}</i> connecté à <i>{escape(gare)}</i>)."
+                      if site else "Aucun site prioritaire ne ressort pour ces filtres.")
+    fallback_analysis = f"""
+    <ul>
+        <li><b>Diagnostic de couverture :</b> Sur le périmètre <i>{escape(dept_label)}</i>, <b>{kpi_couv}</b> des sites sont à 5 km ou moins d'une gare. Un total de <b>{kpi_sites}</b> sites touristiques restent accessibles sans voiture.</li>
+        <li><b>Point de vigilance (Zones Blanches) :</b> <b>{kpi_blanc}</b> des sites souffrent d'un enclavement sévère (> 15 km d'une gare), rendant la voiture individuelle quasi obligatoire pour les visiteurs.</li>
+        <li><b>Recommandation stratégique :</b> {recommandation}</li>
+    </ul>
+    """
+    if not api_key:
+        return fallback_analysis
+
+    try:
+        prompt = f"""Tu es un expert stratégique de la Direction TER & Mobilités de la SNCF.
+        Rédige une analyse synthétique et percutante en 3 puces HTML (<ul><li>...</li></ul>) pour le rapport exécutif du périmètre '{dept_label}'.
+        Données :
+        - Sites à 5 km ou moins d'une gare : {kpi_couv}
+        - Sites accessibles sans voiture : {kpi_sites}
+        - Zones blanches (> 15km) : {kpi_blanc}
+        - Site le plus enclavé : {f"{site} ({gare})" if site else "aucun"}
+        Sois concis, professionnel et orienté plan d'action transporteur."""
+
+        res = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "HTTP-Referer": "https://mysncf-experience.sncf.fr",
+                "X-Title": "MySNCF Experience",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "openai/gpt-4o",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.3
+            },
+            timeout=8
+        )
+        if res.status_code == 200:
+            return res.json()["choices"][0]["message"]["content"]
+        return fallback_analysis
+    except Exception:
+        return fallback_analysis
+
 # ==============================================================================
 # 4. LAYOUT DE L'APPLICATION (SINGLE SCREEN)
 # ==============================================================================
 HAUTEUR_CARTE = "max(640px, calc(100vh - 240px))"      # toute la hauteur de l'écran sous les KPI, pour ne pas avoir à descendre
 # Panneau des trajets (par-dessus la carte, à droite du panneau de recherche) et bouton pour le rouvrir.
-STYLE_PANNEAU = {"position": "absolute", "top": "16px", "right": "16px", "width": "325px", "maxHeight": "calc(100% - 32px)", "overflowY": "auto", "zIndex": "1000",
+STYLE_PANNEAU = {"position": "absolute", "top": "16px", "right": "16px", "width": "420px", "maxHeight": "calc(100% - 32px)", "overflowY": "auto", "overflowX": "hidden", "zIndex": "1000",
                  "borderRadius": "15px", "boxShadow": "0px 4px 15px rgba(0,0,0,0.3)"}
 STYLE_OUVRIR = {"position": "absolute", "top": "16px", "right": "16px", "zIndex": "1000", "backgroundColor": CARMILLON, "border": "none", "fontWeight": "bold",
                 "boxShadow": "0px 4px 15px rgba(0,0,0,0.3)"}
@@ -335,6 +396,7 @@ def mise_en_page():
                         children=[
                             dbc.Tab(label="Itinéraire Voyageur", tab_id="tab-1", tab_style={"cursor": "pointer"}),
                             dbc.Tab(label="Analyse de la couverture ferroviaire", tab_id="tab-2", tab_style={"cursor": "pointer"}),
+                            dbc.Tab(label="Guide & Lexique", tab_id="tab-3", tab_style={"cursor": "pointer"}),
                         ]
                     ),
                 ], className="d-flex align-items-center"),
@@ -443,7 +505,7 @@ def mise_en_page():
                                             html.Div(id="suivi-etat", style={"fontSize": "0.75rem", "opacity": 0.8, "width": "100%"}),
                                         ]),
                                         html.Div(id="poi-legend", className="mb-2"),
-                                        dcc.Loading(type="circle", color=CARMILLON, children=html.Div(id="options-trajets", children=html.Div("Choisissez une gare de départ et une destination, puis lancez la recherche.", className="text-muted"))),
+                                        html.Div(id="options-trajets", children=html.Div("Choisissez une gare de départ et une destination, puis lancez la recherche.", className="text-muted")),       # le chargement s'affiche au milieu de la carte
                                     ])]),
                                 ]),
 
@@ -504,7 +566,7 @@ def mise_en_page():
             ]),
 
             # KPIS
-            dcc.Loading(custom_spinner=custom_spinner, children=[
+            dcc.Loading(custom_spinner=spinner_analyse, children=[
                 html.Div(id="t2-content", children=[
                     dbc.Row(className="g-3 mb-3", children=[
                         dbc.Col(dbc.Card(id="card-kpi-global-1", className="kpi-card", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "borderTopColor": "#10b981", **transition_style}, children=[dbc.CardBody(className="py-2 px-3", children=[
@@ -573,21 +635,47 @@ def mise_en_page():
                             dbc.Card(id="card-outils", className="dash-card p-2 px-3", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], **transition_style}, children=[
                                 dbc.Row(className="align-items-center", children=[
                                     dbc.Col([
-                                        html.H6([html.I(className="fa-solid fa-sliders me-2", style={"color": CARMILLON}), "Outils d'Aide à la Décision"], className="fw-bold m-0 text-uppercase", style={"fontSize": "0.85rem"}),
-                                        html.Small("Consultez la feuille de route opérationnelle ou téléchargez la synthèse stratégique.", className="text-muted")
+                                        html.H6([html.I(className="fa-solid fa-sliders me-2", style={"color": CARMILLON}), "Outils d'Aide à la Décision Métier"], className="fw-bold m-0 text-uppercase", style={"fontSize": "0.85rem"}),
+                                        html.Small("Consultez la feuille de route opérationnelle ou téléchargez la synthèse exécutive.", className="text-muted")
                                     ], width=6),
                                     dbc.Col([
-                                        dbc.Button([html.I(className="fa-solid fa-list-check me-2"), "🎯 Plan d'Action (Top 10)"], id="btn-open-modal", style={"backgroundColor": CARMILLON, "border": "none", "fontWeight": "bold", "fontSize": "0.85rem", "marginRight": "10px"}, n_clicks=0),
+                                        dbc.Button([html.I(className="fa-solid fa-list-check me-2"), "Plan d'Action (Top 10)"], id="btn-open-modal", style={"backgroundColor": CARMILLON, "border": "none", "fontWeight": "bold", "fontSize": "0.85rem", "marginRight": "10px"}, n_clicks=0),
                                         dbc.Tooltip("Ouvre la matrice décisionnelle complète détaillant les gares et sites prioritaires.", target="btn-open-modal", placement="top"),
                                     
-                                        dbc.Button([html.I(className="fa-solid fa-file-arrow-down me-2"), "📄 Exporter le Rapport"], id="btn-export-report", color="dark", outline=True, style={"fontWeight": "bold", "fontSize": "0.85rem"}, n_clicks=0),
-                                        dbc.Tooltip("Télécharge un rapport synthétique au format HTML (imprimable en PDF) incluant les KPIs et le plan d'action.", target="btn-export-report", placement="top")
+                                        dbc.Button([html.I(className="fa-solid fa-file-arrow-down me-2"), "Exporter le Rapport (avec IA)"], id="btn-export-report", color="dark", outline=True, style={"fontWeight": "bold", "fontSize": "0.85rem"}, n_clicks=0),
+                                        dbc.Tooltip("Génère un rapport exécutif complet incluant une synthèse automatique rédigée par l'IA (OpenRouter / GPT-4o).", target="btn-export-report", placement="top")
                                     ], width=6, className="d-flex justify-content-end align-items-center")
                                 ])
                             ]),
                             width=12
                         )
                     ])
+                ])
+            ])
+        ]),
+
+        # CONTENU DE L'ONGLET 3 (GUIDE & LEXIQUE MÉTIER)
+        html.Div(id="tab-3-content", style={"display": "none"}, role="region", **{"aria-label": "Guide et lexique"}, children=[
+            dbc.Card(id="card-guide", className="dash-card p-4", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], **transition_style}, children=[
+                html.H4([html.I(className="fa-solid fa-book-bookmark me-2", style={"color": CARMILLON}), "Guide Utilisateur & Notice Méthodologique"], className="fw-bold mb-3"),
+                html.Hr(),
+                dbc.Row([
+                    dbc.Col([
+                        html.H5("📘 Lexique des Indicateurs", className="fw-bold mb-3", style={"color": CARMILLON}),
+                        html.Ul([
+                            html.Li([html.B("IAF (Indice d'Accessibilité Ferroviaire) : "), "Calculé comme le pourcentage de sites touristiques (POI, monuments, festivals) situés dans un rayon ≤ 5 km d'une gare SNCF."]),
+                            html.Li([html.B("Premier / Dernier Kilomètre : "), "Segment de trajet entre la gare d'arrivée et le site destination, nécessitant de la marche, un VLS (Vélo en Libre-Service), un car ou une voiture."]),
+                            html.Li([html.B("Zones Blanches (> 15 km) : "), "Territoires enclavés où l'offre ferroviaire seule est insuffisante et impose un rabattement routier."]),
+                        ])
+                    ], width=6),
+                    dbc.Col([
+                        html.H5("🛠️ Provenance & Qualité des Données", className="fw-bold mb-3", style={"color": CARMILLON}),
+                        html.Ul([
+                            html.Li([html.B("SNCF Open Data : "), "Jeux de données de géolocalisation des lieux, gares et arrêts routiers."]),
+                            html.Li([html.B("DATAtourisme & Ministère de la Culture : "), "Inventaire national des monuments, musées et programmation événementielle."]),
+                            html.Li([html.B("Dernière mise à jour BDD : "), f"{date.today().strftime('%B %Y')} (Base SQLite locale)."]),
+                        ])
+                    ], width=6),
                 ])
             ])
         ])
@@ -619,6 +707,10 @@ def export_report(n_clicks, regions, categorie, destination, debut, fin, kpi_cou
         df_table = analyse.plan_action(engine, filtres_analyse(categorie, regions, destination, debut, fin), mode="pires")
     except Exception:
         df_table = pd.DataFrame(columns=["SITE TOURISTIQUE", "GARE LA + PROCHE", "DERNIER KM", "PRIORITÉ"])
+
+    # Génération du paragraphe d'analyse rédigé par IA via OpenRouter (GPT-4o)
+    ai_summary_html = generate_ai_analysis_summary(dept_label, kpi_couv, kpi_sites, kpi_blanc, df_table)
+
     table_rows_html = "".join([
         f"<tr><td style='padding:10px;border-bottom:1px solid #eee;'><b>{escape(r['SITE TOURISTIQUE'])}</b></td><td style='padding:10px;border-bottom:1px solid #eee;'>{escape(r['GARE LA + PROCHE'])}</td><td style='padding:10px;border-bottom:1px solid #eee;'>{r['DERNIER KM']}</td><td style='padding:10px;border-bottom:1px solid #eee;color:#c71556;'><b>{r['PRIORITÉ']}</b></td></tr>"
         for _, r in df_table.iterrows()
@@ -632,10 +724,11 @@ def export_report(n_clicks, regions, categorie, destination, debut, fin, kpi_cou
         <style>
             body {{ font-family: 'Segoe UI', Arial, sans-serif; margin: 40px; color: #212529; background: #f8f9fa; }}
             .header {{ background: #c71556; color: white; padding: 25px; border-radius: 10px; margin-bottom: 30px; }}
-            .kpi-container {{ display: flex; gap: 20px; margin-bottom: 30px; }}
+            .kpi-container {{ display: flex; gap: 20px; margin-bottom: 25px; }}
             .kpi-box {{ flex: 1; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); border-top: 5px solid #c71556; }}
             .kpi-title {{ font-size: 0.8rem; text-transform: uppercase; color: #6c757d; font-weight: bold; }}
             .kpi-value {{ font-size: 2rem; font-weight: bold; margin-top: 5px; color: #11151c; }}
+            .ai-box {{ background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); margin-bottom: 30px; border-left: 5px solid #10b981; }}
             table {{ width: 100%; border-collapse: collapse; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05); margin-top: 15px; }}
             th {{ background: #343a40; color: white; padding: 12px; text-align: left; font-size: 0.85rem; text-transform: uppercase; }}
         </style>
@@ -662,6 +755,11 @@ def export_report(n_clicks, regions, categorie, destination, debut, fin, kpi_cou
             </div>
         </div>
         
+        <h2 style="font-size: 1.2rem; color: #495057;">Synthèse Décisionnelle (Analyse IA GPT-4o / OpenRouter)</h2>
+        <div class="ai-box">
+            {ai_summary_html}
+        </div>
+
         <h2 style="font-size: 1.2rem; color: #495057;">Plan d'Action Opérationnel — Top 10 des Zones Prioritaires</h2>
         <table>
             <thead>
@@ -682,13 +780,15 @@ def export_report(n_clicks, regions, categorie, destination, debut, fin, kpi_cou
     return dcc.send_string(html_content, filename=f"Rapport_SNCF_Accessibilite_{date.today().strftime('%Y%m%d')}.html")
 
 @app.callback(
-    [Output("tab-1-content", "style"), Output("tab-2-content", "style")],
+    [Output("tab-1-content", "style"), Output("tab-2-content", "style"), Output("tab-3-content", "style")],
     Input("tabs-navigation", "active_tab")
 )
 def switch_tab_content(active_tab):
     if active_tab == "tab-1":
-        return {"display": "block"}, {"display": "none"}
-    return {"display": "none"}, {"display": "block"}
+        return {"display": "block"}, {"display": "none"}, {"display": "none"}
+    elif active_tab == "tab-3":
+        return {"display": "none"}, {"display": "none"}, {"display": "block"}
+    return {"display": "none"}, {"display": "block"}, {"display": "none"}
 
 # La carte est créée dans l'onglet caché : elle recalcule sa taille quand on ouvre l'onglet Itinéraire (src/assets/trains.js).
 app.clientside_callback(
@@ -797,7 +897,7 @@ def update_destinations(recherche, categorie, choisi):
      Output("card-kpi-dist", "style"), Output("card-kpi-trans", "style"), Output("card-kpi-statut", "style"),
      Output("card-kpi-global-1", "style"), Output("card-kpi-global-2", "style"), Output("card-kpi-global-3", "style"),
      Output("card-map", "style"), Output("card-g1", "style"), Output("card-g3", "style"),
-     Output("card-g4-saison", "style"), Output("card-outils", "style"),
+     Output("card-g4-saison", "style"), Output("card-outils", "style"), Output("card-guide", "style"),
      Output("map-tiles", "url"), Output("card-map", "className"),
      Output("t2-kpi-couverture", "children"), Output("t2-kpi-sites", "children"), Output("t2-kpi-blanches", "children"),
      Output("graph-1", "figure"), Output("graph-3", "figure"), Output("graph-4", "figure"),
@@ -944,7 +1044,7 @@ def update_ui_and_graphs(theme_values, categorie, t2_clicks, table_mode, click_d
         card_iti, card_iti, card_iti,
         card_st, card_st, card_st,
         {"backgroundColor": colors["card_bg"], "color": colors["text"], "border": "none", "height": HAUTEUR_CARTE, "position": "relative", "overflow": "hidden", **transition_style},
-        card_st, card_st, card_st, card_st,
+        card_st, card_st, card_st, card_st, card_st,
         colors["tiles"], colors["map_class"],
         kpi_couv, kpi_sites, kpi_blanc,
         fig1, fig3, fig4, generate_decision_table(theme, df_table),
@@ -998,22 +1098,40 @@ def _echantillon(couleur, tirets):
         position += v
     return html.Span(style={**base, "background": f"repeating-linear-gradient(90deg, {', '.join(arrets)})"})
 
-def _carte_option(i, trajet, actif, traces, etiquettes=()):
-    """Un bloc cliquable : étiquettes (le plus rapide…), heures, durée, correspondances, puis un trait + le nom et les horaires de chaque train."""
+def _ligne_etape(t):
+    """Une étape dans le détail d'une option : le service et son numéro (« TGV INOUI 6120 », « Bus AIX - AEROPORT », « À pied · 6 min »), ses horaires
+    et son retard, puis les gares de départ et d'arrivée."""
+    retard = t.get("retard_min") or 0
+    gares = f"{nom_gare(t['de'])} → {nom_gare(t['vers'])}" if t.get("de") and t.get("vers") and nom_gare(t["de"]) != nom_gare(t["vers"]) else ""
+    return html.Div(className="mb-1", style={"fontSize": "0.8rem"}, children=[
+        html.Div(style={"whiteSpace": "nowrap", "overflow": "hidden", "textOverflow": "ellipsis"}, children=[
+            _echantillon(t["style"]["couleur"], t["style"]["tirets"]), html.Span(t["libelle"], className="fw-bold" if not t["marche"] else ""),
+            html.Span(_horaire_section(t), style={"opacity": 0.7}),
+            *([html.Span(f" · +{retard} min", className="fw-bold", style={"color": "#c0392b"})] if retard else [])]),
+        *([html.Div(gares, style={"opacity": 0.7, "paddingLeft": "36px", "fontSize": "0.74rem", "whiteSpace": "nowrap", "overflow": "hidden", "textOverflow": "ellipsis"})] if gares else []),
+    ])
+
+def _carte_option(i, trajet, actif, traces, etiquettes=(), fin=None):
+    """Un bloc cliquable : étiquettes (le plus rapide…), heures, durée, correspondances, puis chaque étape (service, numéro, horaires, gares).
+    `fin` : (libellé, détail) du dernier kilomètre jusqu'à la destination, ajouté après le dernier train à l'aller."""
     puces = [html.Span([html.I(className=f"fa-solid {icone} me-1"), texte], className="badge rounded-pill me-1", style={"backgroundColor": couleur, "fontSize": "0.68rem"})
              for texte, icone, couleur in etiquettes]
-    lignes = [html.Div(className="mb-0", style={"fontSize": "0.8rem", "whiteSpace": "nowrap", "overflow": "hidden", "textOverflow": "ellipsis"}, children=[_echantillon(t["style"]["couleur"], t["style"]["tirets"]), html.Span(t["libelle"], className="fw-bold" if not t["marche"] else ""),
-                                                   html.Span(_horaire_section(t), style={"opacity": 0.7})]) for t in traces]
+    lignes = [_ligne_etape(t) for t in traces]
+    if fin:
+        lignes.append(html.Div(className="mb-1", style={"fontSize": "0.8rem"}, children=[
+            html.Div([_echantillon(fin[2]["couleur"], fin[2]["tirets"]), html.Span(fin[0])]),
+            html.Div(fin[1], style={"opacity": 0.7, "paddingLeft": "36px", "fontSize": "0.74rem"})]))
     co2 = trajet.get("co2_g")
-    retard = max([sec.get("retard_min") or 0 for sec in trajet["sections"] if sec["type"] == "public_transport"] or [0])
+    en_retard = [t for t in traces if not t["marche"] and (t.get("retard_min") or 0) > 0]
+    retards = "Retard annoncé : " + ", ".join(f"{t['retard_min']} min sur {t['libelle']}" for t in en_retard) if en_retard else ""
     return html.Div(style={"flex": "0 0 auto"}, children=html.Div(id={"type": "option", "index": i}, n_clicks=0, role="button", tabIndex=0, **{"aria-pressed": "true" if actif else "false"}, children=[
         *([html.Div(puces, className="mb-2")] if puces else []),
         html.Div([html.Span(f"Option {i + 1}", className="badge me-2", style={"backgroundColor": CARMILLON if actif else "#6c757d"}),
                   html.Span(f"{_heure(trajet['depart'])} → {_heure(trajet['arrivee'])}", className="fs-6 fw-bold")]),
         html.Div(f"{_duree(trajet['duree_s'])} · " + (f"{trajet['correspondances']} corresp." if trajet["correspondances"] else "direct")
                  + (f" · {co2 / 1000:.1f} kg CO₂e" if co2 else ""), className="mb-1", style={"opacity": 0.8, "fontSize": "0.78rem"}),
-        *([html.Div(f"Retard annoncé : {retard} min", className="mb-2 fw-bold", style={"color": "#c0392b"})] if retard else []),
-        *(lignes if actif else []),                   # le détail des trains n'apparaît qu'au clic sur l'option
+        *([html.Div(retards, className="mb-2 fw-bold", style={"color": "#c0392b", "fontSize": "0.78rem"})] if retards else []),
+        *(lignes if actif else []),                   # le détail des étapes n'apparaît qu'au clic sur l'option
     ], style={"cursor": "pointer", "padding": "8px 10px", "borderRadius": "10px", "height": "100%",
               "border": f"3px solid {CARMILLON}" if actif else "1px solid rgba(128,128,128,0.35)",
               "boxShadow": "0px 4px 14px rgba(0,0,0,0.18)" if actif else "none", "transition": "all 0.2s ease"}))
@@ -1182,7 +1300,10 @@ def afficher_resultat(r, selection, categorie):
         blocs = _message("Aucun train trouvé pour ce créneau.", "warning")
     else:
         etiquettes = etiquettes_trajets(trajets)
-        blocs = html.Div([_carte_option(i, t, i == index, traces_options[i], etiquettes[i]) for i, t in enumerate(trajets)],
+        mode_fin, detail_fin = r["dernier_km"]
+        fin = None if retour or mode_fin == "--" or r["destination"]["type"] == "ville" else (f"{mode_fin} · {detail_fin}" if mode_fin == "Marche à pied" else mode_fin,
+                                                        f"{nom_gare(gare['nom'])} → {r['destination']['nom']}", style_dernier_km(mode_fin))
+        blocs = html.Div([_carte_option(i, t, i == index, traces_options[i], etiquettes[i], fin) for i, t in enumerate(trajets)],
                          style={"display": "flex", "flexDirection": "column", "gap": "8px"})
 
     co2 = trajets[index].get("co2_g") if trajets else None
@@ -1194,7 +1315,7 @@ def afficher_resultat(r, selection, categorie):
         viewport = dict(bounds=[[min(p[0] for p in points), min(p[1] for p in points)], [max(p[0] for p in points), max(p[1] for p in points)]], transition="flyTo")
     for t in traces:                                    # ce dont le navigateur a besoin pour dessiner le train (image, taille réelle)
         t.update(sprites.infos(t["style"]["cle"], t["libelle"]))
-    pas = [t["points"] for t in traces if t["marche"]]  # trajets à pied, dessinés en empreintes de pas
+    pas = [t["points"] for t in traces if t["marche"] and t["style"]["cle"] == "pied"]  # trajets à pied, dessinés en empreintes de pas
     if gare and r["dernier_km"][0] == "Marche à pied":
         pas.append([[gare["lat"], gare["lon"]], [r["destination"]["lat"], r["destination"]["lon"]]])
     return (blocs, titre, [], visible if r["trajets_retour"] else cache, detail_statut,

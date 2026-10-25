@@ -71,6 +71,13 @@ def test_rattacher_par_position_prefere_le_nom_compatible():
     assert gtfs.rattacher_par_position(proche, gares, 300) == [1]               # à moins de 50 m : accepté malgré le nom
 
 
+def test_rattacher_par_position_garde_la_gare_tgv_meme_mal_placee():
+    gares = pd.DataFrame({"id": [1, 2], "nom": ["Aix-en-Provence", "Aix-en-Provence TGV"], "lat": [43.5229, 43.4552], "lon": [5.4453, 5.3175]})
+    # Trenitalia place « Aix-en-Provence-TGV » au centre d'Aix : la gare du centre est à côté, mais ce n'est pas la gare TGV
+    arrets = pd.DataFrame({"nom": ["Aix-en-Provence-TGV", "Aix-en-Provence"], "lat": [43.522763, 43.5229], "lon": [5.445177, 5.4452]})
+    assert gtfs.rattacher_par_position(arrets, gares, 300) == [2, 1]
+
+
 TRANSILIEN = {
     "agency": pd.DataFrame({"agency_id": ["71", "1046", "93"], "agency_name": ["RER", "Transilien", "TER"]}),
     "routes": pd.DataFrame({"route_id": ["RA", "TH", "TB", "TER1", "RR"], "agency_id": ["71", "1046", "71", "93", "71"],
