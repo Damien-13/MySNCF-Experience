@@ -79,7 +79,7 @@ from datetime import datetime, timedelta
 from lib.db.connection import get_engine
 from flask import Response, abort
 from lib import analyse, circulations, lecture, sprites, suivi
-from lib.itineraire import FENETRE_API_JOURS, options_heures, retour_minimum, RAYON_POI_KM, chercher_destinations, etiquettes_trajets, options_gares, quand_depuis, rechercher, style_dernier_km, tracer_trajet
+from lib.itineraire import FENETRE_API_JOURS, options_heures, retour_minimum, RAYON_POI_KM, chercher_destinations, etiquettes_trajets, nom_gare, options_gares, quand_depuis, rechercher, style_dernier_km, tracer_trajet
 from lib.reseau_ferre import charger_reseau
 
 # ==============================================================================
@@ -198,10 +198,14 @@ def get_departements_options():
     except Exception:
         return []
 
-custom_spinner = html.Div([
-    html.I(className="fa-solid fa-train-subway fa-beat-fade me-3", style={"color": CARMILLON, "fontSize": "2rem"}),
-    html.Div("Analyse SQL en cours...", className="mt-2 text-muted fw-bold")
-], className="text-center p-3")
+def spinner(texte):
+    return html.Div([
+        html.I(className="fa-solid fa-train-subway fa-beat-fade me-3", style={"color": CARMILLON, "fontSize": "2rem"}),
+        html.Div(texte, className="mt-2 text-muted fw-bold")
+    ], className="text-center p-3")
+
+custom_spinner = spinner("Recherche en cours...")
+spinner_analyse = spinner("Calcul en cours...")
 
 # ==============================================================================
 # 3. MOTEUR ANALYTIQUE (requêtes dans lib/analyse.py)
@@ -504,7 +508,7 @@ def mise_en_page():
             ]),
 
             # KPIS
-            dcc.Loading(custom_spinner=custom_spinner, children=[
+            dcc.Loading(custom_spinner=spinner_analyse, children=[
                 html.Div(id="t2-content", children=[
                     dbc.Row(className="g-3 mb-3", children=[
                         dbc.Col(dbc.Card(id="card-kpi-global-1", className="kpi-card", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "borderTopColor": "#10b981", **transition_style}, children=[dbc.CardBody(className="py-2 px-3", children=[
@@ -998,22 +1002,40 @@ def _echantillon(couleur, tirets):
         position += v
     return html.Span(style={**base, "background": f"repeating-linear-gradient(90deg, {', '.join(arrets)})"})
 
-def _carte_option(i, trajet, actif, traces, etiquettes=()):
-    """Un bloc cliquable : étiquettes (le plus rapide…), heures, durée, correspondances, puis un trait + le nom et les horaires de chaque train."""
+def _ligne_etape(t):
+    """Une étape dans le détail d'une option : le service et son numéro (« TGV INOUI 6120 », « Bus AIX - AEROPORT », « À pied · 6 min »), ses horaires
+    et son retard, puis les gares de départ et d'arrivée."""
+    retard = t.get("retard_min") or 0
+    gares = f"{nom_gare(t['de'])} → {nom_gare(t['vers'])}" if t.get("de") and t.get("vers") and nom_gare(t["de"]) != nom_gare(t["vers"]) else ""
+    return html.Div(className="mb-1", style={"fontSize": "0.8rem"}, children=[
+        html.Div(style={"whiteSpace": "nowrap", "overflow": "hidden", "textOverflow": "ellipsis"}, children=[
+            _echantillon(t["style"]["couleur"], t["style"]["tirets"]), html.Span(t["libelle"], className="fw-bold" if not t["marche"] else ""),
+            html.Span(_horaire_section(t), style={"opacity": 0.7}),
+            *([html.Span(f" · +{retard} min", className="fw-bold", style={"color": "#c0392b"})] if retard else [])]),
+        *([html.Div(gares, style={"opacity": 0.7, "paddingLeft": "36px", "fontSize": "0.74rem", "whiteSpace": "nowrap", "overflow": "hidden", "textOverflow": "ellipsis"})] if gares else []),
+    ])
+
+def _carte_option(i, trajet, actif, traces, etiquettes=(), fin=None):
+    """Un bloc cliquable : étiquettes (le plus rapide…), heures, durée, correspondances, puis chaque étape (service, numéro, horaires, gares).
+    `fin` : (libellé, détail) du dernier kilomètre jusqu'à la destination, ajouté après le dernier train à l'aller."""
     puces = [html.Span([html.I(className=f"fa-solid {icone} me-1"), texte], className="badge rounded-pill me-1", style={"backgroundColor": couleur, "fontSize": "0.68rem"})
              for texte, icone, couleur in etiquettes]
-    lignes = [html.Div(className="mb-0", style={"fontSize": "0.8rem", "whiteSpace": "nowrap", "overflow": "hidden", "textOverflow": "ellipsis"}, children=[_echantillon(t["style"]["couleur"], t["style"]["tirets"]), html.Span(t["libelle"], className="fw-bold" if not t["marche"] else ""),
-                                                   html.Span(_horaire_section(t), style={"opacity": 0.7})]) for t in traces]
+    lignes = [_ligne_etape(t) for t in traces]
+    if fin:
+        lignes.append(html.Div(className="mb-1", style={"fontSize": "0.8rem"}, children=[
+            html.Div([_echantillon(fin[2]["couleur"], fin[2]["tirets"]), html.Span(fin[0])]),
+            html.Div(fin[1], style={"opacity": 0.7, "paddingLeft": "36px", "fontSize": "0.74rem"})]))
     co2 = trajet.get("co2_g")
-    retard = max([sec.get("retard_min") or 0 for sec in trajet["sections"] if sec["type"] == "public_transport"] or [0])
+    en_retard = [t for t in traces if not t["marche"] and (t.get("retard_min") or 0) > 0]
+    retards = "Retard annoncé : " + ", ".join(f"{t['retard_min']} min sur {t['libelle']}" for t in en_retard) if en_retard else ""
     return html.Div(style={"flex": "0 0 auto"}, children=html.Div(id={"type": "option", "index": i}, n_clicks=0, role="button", tabIndex=0, **{"aria-pressed": "true" if actif else "false"}, children=[
         *([html.Div(puces, className="mb-2")] if puces else []),
         html.Div([html.Span(f"Option {i + 1}", className="badge me-2", style={"backgroundColor": CARMILLON if actif else "#6c757d"}),
                   html.Span(f"{_heure(trajet['depart'])} → {_heure(trajet['arrivee'])}", className="fs-6 fw-bold")]),
         html.Div(f"{_duree(trajet['duree_s'])} · " + (f"{trajet['correspondances']} corresp." if trajet["correspondances"] else "direct")
                  + (f" · {co2 / 1000:.1f} kg CO₂e" if co2 else ""), className="mb-1", style={"opacity": 0.8, "fontSize": "0.78rem"}),
-        *([html.Div(f"Retard annoncé : {retard} min", className="mb-2 fw-bold", style={"color": "#c0392b"})] if retard else []),
-        *(lignes if actif else []),                   # le détail des trains n'apparaît qu'au clic sur l'option
+        *([html.Div(retards, className="mb-2 fw-bold", style={"color": "#c0392b", "fontSize": "0.78rem"})] if retards else []),
+        *(lignes if actif else []),                   # le détail des étapes n'apparaît qu'au clic sur l'option
     ], style={"cursor": "pointer", "padding": "8px 10px", "borderRadius": "10px", "height": "100%",
               "border": f"3px solid {CARMILLON}" if actif else "1px solid rgba(128,128,128,0.35)",
               "boxShadow": "0px 4px 14px rgba(0,0,0,0.18)" if actif else "none", "transition": "all 0.2s ease"}))
@@ -1182,7 +1204,10 @@ def afficher_resultat(r, selection, categorie):
         blocs = _message("Aucun train trouvé pour ce créneau.", "warning")
     else:
         etiquettes = etiquettes_trajets(trajets)
-        blocs = html.Div([_carte_option(i, t, i == index, traces_options[i], etiquettes[i]) for i, t in enumerate(trajets)],
+        mode_fin, detail_fin = r["dernier_km"]
+        fin = None if retour or mode_fin == "--" or r["destination"]["type"] == "ville" else (f"{mode_fin} · {detail_fin}" if mode_fin == "Marche à pied" else mode_fin,
+                                                        f"{nom_gare(gare['nom'])} → {r['destination']['nom']}", style_dernier_km(mode_fin))
+        blocs = html.Div([_carte_option(i, t, i == index, traces_options[i], etiquettes[i], fin) for i, t in enumerate(trajets)],
                          style={"display": "flex", "flexDirection": "column", "gap": "8px"})
 
     co2 = trajets[index].get("co2_g") if trajets else None
@@ -1194,7 +1219,7 @@ def afficher_resultat(r, selection, categorie):
         viewport = dict(bounds=[[min(p[0] for p in points), min(p[1] for p in points)], [max(p[0] for p in points), max(p[1] for p in points)]], transition="flyTo")
     for t in traces:                                    # ce dont le navigateur a besoin pour dessiner le train (image, taille réelle)
         t.update(sprites.infos(t["style"]["cle"], t["libelle"]))
-    pas = [t["points"] for t in traces if t["marche"]]  # trajets à pied, dessinés en empreintes de pas
+    pas = [t["points"] for t in traces if t["marche"] and t["style"]["cle"] == "pied"]  # trajets à pied, dessinés en empreintes de pas
     if gare and r["dernier_km"][0] == "Marche à pied":
         pas.append([[gare["lat"], gare["lon"]], [r["destination"]["lat"], r["destination"]["lon"]]])
     return (blocs, titre, [], visible if r["trajets_retour"] else cache, detail_statut,

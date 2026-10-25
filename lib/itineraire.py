@@ -7,7 +7,9 @@ Usage :
     chercher_destinations("chambord", "culture")             # même format, 50 résultats au plus ; les villes (value « ville:Blois|41 ») viennent en tête
     r = rechercher(depart_id, destination_id, quand="2026-10-12 08:00", retour="2026-10-14 18:00")
 
-rechercher() retourne un dict (None si un lieu est inconnu) : depart, destination, gare_arrivee, distance_km (destination → gare la plus proche),
+rechercher() retourne un dict (None si un lieu est inconnu) : depart, destination, gare_arrivee (pour une ville : la gare où arrivent les trains directs,
+voir lib/acheminement.py), distance_km (destination → gare d'arrivée), relais (gare proche du départ d'où partent des trains directs, rejointe en car
+ou en voiture : ses trajets ont via=True), 
 alentours (stations vélo et arrêts de bus près de la gare d'arrivée), dernier_km (mode, détail), faisable, trajets (aller, Navitia, jusqu'à 3),
 trajets_retour (idem pour le retour, vide sans date de retour), meme_gare (la gare d'arrivée est celle du départ : pas de train), erreur_api (texte, sinon None), pois (lieux de toutes les catégories autour de la destination : le dashboard filtre à l'affichage).
 tracer_trajet() dessine un trajet : un tracé collé aux voies par train, avec la couleur et les tirets du service (style_ligne).
@@ -15,12 +17,14 @@ Rien n'est stocké : l'API Navitia est appelée à chaque recherche (voir lib/na
 """
 import math
 import re
+import unicodedata
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time, timedelta
 
 import pandas as pd
 import sqlalchemy as sa
 
-from lib import navitia
+from lib import acheminement, navitia
 from lib.db.connection import get_engine
 from lib.trace_bus import trace_car
 from lib.reseau_ferre import chemin, chemin_par_arrets
@@ -105,11 +109,27 @@ def chercher_destinations(texte, categorie="tous", engine=None, inclure=None, li
         ordre = f"{rang}, nom NOT LIKE :debut, nom"
         params.update(texte=f"%{texte.strip()}%", debut=f"{texte.strip()}%")
     requete = sa.text(f"SELECT id, nom, commune, type FROM lieu WHERE {where} ORDER BY {ordre} LIMIT :limite").bindparams(sa.bindparam("types", expanding=True))
-    df = pd.read_sql(requete, moteur, params=params).drop_duplicates(["nom", "commune"])      # un même lieu est parfois en culture et en tourisme
+    df = pd.read_sql(requete, moteur, params=params)
+    df = df[~df.assign(n=df["nom"].map(_nom_normal), c=df["commune"].map(_commune_normale)).duplicated(["n", "c"])]   # « Tour Eiffel », « La tour Eiffel » (Paris 7e)
     inclure = None if _est_ville(inclure) else inclure
     if inclure is not None and int(inclure) not in set(df["id"]):
         df = pd.concat([pd.read_sql(sa.text("SELECT id, nom, commune, type FROM lieu WHERE id = :id"), moteur, params={"id": int(inclure)}), df])
     return villes + [{"label": f"{nom} ({commune})" if commune else nom, "value": int(i), "type": t} for i, nom, commune, t in zip(df["id"], df["nom"], df["commune"], df["type"])]
+
+
+def _sans_accents(texte):
+    return "".join(c for c in unicodedata.normalize("NFD", str(texte or "")) if unicodedata.category(c) != "Mn").casefold()
+
+
+def _nom_normal(nom):
+    """Nom comparable entre sources : sans accents ni casse, sans article en tête ni ponctuation (« La tour Eiffel » = « Tour Eiffel »)."""
+    nom = re.sub(r"[^a-z0-9]+", " ", _sans_accents(nom)).strip()
+    return re.sub(r"^(l|la|le|les) ", "", nom)
+
+
+def _commune_normale(commune):
+    """Commune comparable : « Paris 7e Arrondissement » = « Paris »."""
+    return re.sub(r"\s+\d+(er|e|eme)?\s+arrondissement$", "", _sans_accents(commune).strip())
 
 
 def _lieu(engine, lieu_id):
@@ -190,6 +210,37 @@ STYLES = {
     "voiture": ("Voiture / Taxi", "#555555", "18 8"),
 }
 DERNIER_KM = {"Marche à pied": "pied", "Vélo / Bus": "velo_bus", "Voiture / Taxi": "voiture"}
+
+
+def nom_gare(nom):
+    """Nom de gare lisible : sans la commune entre parenthèses ni les tirets de l'API (« Paris - Gare de Lyon - Hall 1 & 2 (Paris) » → « Paris Gare de Lyon Hall 1 & 2 »)."""
+    return re.sub(r"\s*\([^)]*\)$", "", str(nom or "")).replace(" - ", " ").strip()
+
+
+def nom_service(section):
+    """Nom clair du service d'une section : « TGV INOUI », « TER », « Intercités de nuit », « Car », « Bus », « RER », « Voiture »…"""
+    if section.get("mode") == "car":
+        return "Voiture"
+    style = style_ligne(section)["cle"]
+    texte = f"{section.get('ligne') or ''} {section.get('reseau') or ''} {section.get('mode_physique') or ''}".lower()
+    if style == "bus":
+        return "Car" if re.search(r"\b(car|autocar|coach)\b", texte) else "Bus"
+    if style == "intercites":
+        return "Intercités de nuit" if "nuit" in texte else "Intercités"
+    if style == "ter":
+        return "TER"
+    if style == "rer":
+        return "RER" if "rer" in texte else "Transilien"
+    return STYLES[style][0]
+
+
+def libelle_section(section):
+    """« TGV INOUI 6174 », « TER ZOU ! 879633 », « Car AIX - AEROPORT » : le service, la ligne quand elle apporte une information, le numéro."""
+    service, ligne, numero = nom_service(section), section.get("ligne") or "", section.get("numero") or ""
+    if service in ("RER", "Transilien") and section.get("code"):          # « RER D » : le numéro d'un RER est un code de mission (« FECA ») qui ne dit rien au voyageur
+        return f"{service} {section['code']}"
+    morceaux = [service] + ([ligne] if ligne and _sans_accents(ligne) not in _sans_accents(service) and _sans_accents(service) not in _sans_accents(ligne) else []) + [numero]
+    return " ".join(m for m in morceaux if m).strip()
 
 
 def style_ligne(section):
@@ -279,14 +330,17 @@ def tracer_trajet(trajet, reseau, depart, arrivee, engine=None):
             else:                                # un train passe par chacune de ses gares : sinon le plus court chemin peut prendre d'autres lignes
                 points, ok = chemin_par_arrets(reseau, [de, *(s.get("arrets_lonlat") or [])[1:-1], vers])
             etapes.append({**_horaires(s), "points": [[lat, lon] for lon, lat in points], "sur_voie": ok, "style": style, "marche": False,
-                           "libelle": f"{s.get('ligne') or 'Train'} {s.get('numero') or ''}".strip()})
+                           "libelle": libelle_section(s), "service": nom_service(s)})
+        elif s["type"] == "street_network" and s.get("mode") == "car":     # jusqu'à la gare relais sans car ce jour-là : estimée, pas animée
+            etapes.append({**_horaires(s), "points": [[de[1], de[0]], [vers[1], vers[0]]], "sur_voie": False, "style": style_dernier_km("Voiture / Taxi"), "marche": True,
+                           "libelle": f"Voiture · {round(s['duree_s'] / 60)} min (estimé)", "service": "Voiture"})
         elif s["type"] in ("transfer", "street_network", "crow_fly") and s.get("mode") == "walking" and s["duree_s"] >= 60 and de != vers:
             etapes.append({**_horaires(s), "points": [[de[1], de[0]], [vers[1], vers[0]]], "sur_voie": False, "style": style_dernier_km("Marche à pied"), "marche": True,
-                           "libelle": f"À pied · {round(s['duree_s'] / 60)} min"})
+                           "libelle": f"À pied · {round(s['duree_s'] / 60)} min", "service": "À pied"})
     if not any(not e["marche"] for e in etapes):
         points, ok = chemin(reseau, depart, arrivee)
         etapes.insert(0, {"de": None, "vers": None, "depart": None, "arrivee": None, "retard_min": 0, "points": [[lat, lon] for lon, lat in points], "sur_voie": ok,
-                          "style": style_ligne({}), "marche": False, "libelle": "Liaison directe"})
+                          "style": style_ligne({}), "marche": False, "libelle": "Liaison directe", "service": "Train"})
     return etapes
 
 
@@ -319,27 +373,70 @@ def options_heures(jour, minimum):
     return [{"label": f"{h:02d}:00", "value": f"{h:02d}:00", "disabled": bool(jour and minimum and datetime.combine(jour, time(h)) < minimum)} for h in HEURES]
 
 
+def _trajets(depart, arrivee, quand, nombre):
+    return navitia.itineraires(navitia.id_gare(depart["code_uic"]), navitia.id_gare(arrivee["code_uic"]), quand=quand, nombre=nombre)
+
+
+def _via_relais(engine, depart, relais, arrivee, quand, retour=False):
+    """Trajet par la gare relais : car (ou voiture) jusqu'au relais puis train ; au retour, train jusqu'au relais puis car. [] si l'API ne trouve rien."""
+    if not retour:
+        quand = quand or datetime.now()
+        avant = acheminement.acheminer(engine, depart, relais, quand)
+        trains = _trajets(relais, arrivee, avant[-1]["arrivee"] + acheminement.MARGE_CORRESPONDANCE, 1)
+        if not trains:
+            return []
+        train = next(s for s in trains[0]["sections"] if s["type"] == "public_transport")       # le dernier car qui arrive à temps : moins d'attente au relais
+        avant = acheminement.acheminer(engine, depart, relais, quand, au_plus_tard=train["depart"] - acheminement.MARGE_CORRESPONDANCE) or avant
+        return [acheminement.assembler(avant, trains[0])]
+    trains = _trajets(arrivee, relais, quand, 1)
+    if not trains:
+        return []
+    return [acheminement.assembler([], trains[0], acheminement.acheminer(engine, relais, depart, trains[0]["arrivee"] + acheminement.MARGE_CORRESPONDANCE))]
+
+
+def _fusionner(directs, via):
+    """Les MAX_TRAJETS premiers trajets par heure d'arrivée, en gardant toujours l'option par la gare relais si elle existe."""
+    tous = sorted(directs + via, key=lambda t: (t["arrivee"], t["correspondances"]))[:MAX_TRAJETS]
+    if via and not any(t.get("via") for t in tous):
+        tous = sorted(tous[:MAX_TRAJETS - 1] + via[:1], key=lambda t: (t["arrivee"], t["correspondances"]))
+    return tous
+
+
 def rechercher(depart_id, destination_id, quand=None, retour=None, engine=None):
-    """Prépare tout l'onglet pour un départ (id d'une gare) et une destination (id d'un lieu) : voir l'en-tête du module."""
+    """Prépare tout l'onglet pour un départ (id d'une gare) et une destination (id d'un lieu ou d'une ville) : voir l'en-tête du module."""
     engine = engine or get_engine()
     depart, destination = _lieu(engine, depart_id), _lieu(engine, destination_id)
     if depart is None or destination is None:
         return None
+    if destination["type"] == "ville":              # la gare de la ville où arrivent les trains directs (sinon la gare la plus proche du centre n'a parfois aucun train)
+        voisines = acheminement.gares_proches(engine, depart["lat"], depart["lon"], acheminement.RAYON_RELAIS_KM)["id"].tolist() if depart.get("lat") is not None else []
+        visee = acheminement.gare_de_ville(engine, destination["lat"], destination["lon"], [depart["id"], *voisines])
+        if visee is not None:
+            g = _lieu(engine, visee)
+            destination = {**destination, "gare_proche_id": visee,
+                           "distance_gare_km": acheminement._km(destination["lat"], destination["lon"], g["lat"], g["lon"])}
     gare = _lieu(engine, destination["gare_proche_id"]) if destination["gare_proche_id"] else None
     distance = destination["distance_gare_km"]
     proches = alentours(engine, gare["lat"], gare["lon"]) if gare else {"velo": 0, "bus": 0}
     resultat = {"depart": depart, "destination": destination, "gare_arrivee": gare, "distance_km": distance, "alentours": proches,
                 "dernier_km": dernier_km(distance, proches), "faisable": None if distance is None else distance <= SEUIL_VELO_BUS_KM,
                 "trajets": [], "trajets_retour": [], "erreur_api": None, "periode_invalide": periode_invalide(quand) or periode_invalide(retour) or retour_invalide(quand, retour), "meme_gare": gare is not None and gare["id"] == depart["id"],
-                "pois": pois_autour(engine, destination["lat"], destination["lon"], "tous")}
+                "relais": None, "pois": pois_autour(engine, destination["lat"], destination["lon"], "tous")}
     if gare is None or resultat["meme_gare"] or not depart["code_uic"] or not gare["code_uic"]:
         return resultat
     if resultat["periode_invalide"]:
         return resultat
+    relais = acheminement.gare_relais(engine, depart, gare) if depart.get("lat") is not None else None
+    resultat["relais"] = relais
     try:
-        resultat["trajets"] = navitia.itineraires(navitia.id_gare(depart["code_uic"]), navitia.id_gare(gare["code_uic"]), quand=quand, nombre=MAX_TRAJETS)
-        if retour is not None:
-            resultat["trajets_retour"] = navitia.itineraires(navitia.id_gare(gare["code_uic"]), navitia.id_gare(depart["code_uic"]), quand=retour, nombre=MAX_TRAJETS)
+        with ThreadPoolExecutor(max_workers=4) as pool:          # les appels à l'API sont indépendants : en parallèle
+            aller = pool.submit(_trajets, depart, gare, quand, MAX_TRAJETS)
+            aller_relais = pool.submit(_via_relais, engine, depart, relais, gare, quand) if relais else None
+            arriere = pool.submit(_trajets, gare, depart, retour, MAX_TRAJETS) if retour is not None else None
+            arriere_relais = pool.submit(_via_relais, engine, depart, relais, gare, retour, True) if relais and retour is not None else None
+            resultat["trajets"] = _fusionner(aller.result(), aller_relais.result() if aller_relais else [])
+            if arriere:
+                resultat["trajets_retour"] = _fusionner(arriere.result(), arriere_relais.result() if arriere_relais else [])
     except RuntimeError as erreur:
         resultat["erreur_api"] = str(erreur)
     return resultat

@@ -10,6 +10,8 @@ Usage :
 import re
 from datetime import datetime
 
+from lib.itineraire import libelle_section
+
 PHRASE_ACCUEIL = "Aucune recherche pour l'instant. Choisissez une gare de départ et une destination, puis lancez la recherche."
 
 
@@ -38,10 +40,10 @@ def heure_parlee(texte):
 
 
 def _etape(section):
-    """Phrase d'une section d'un trajet : un train ou un car (numéro, gares, horaires), ou une marche d'au moins une minute ; None sinon."""
+    """Phrase d'une section d'un trajet : un train, un car ou un bus (service, numéro, gares, horaires), une marche d'au moins une minute
+    ou un trajet en voiture jusqu'à la gare ; None sinon."""
     if section.get("type") == "public_transport":
-        nom = f"{section.get('ligne') or 'Train'} {section.get('numero') or ''}".strip()
-        phrase = f"{nom}"
+        phrase = libelle_section(section) or "Train"
         if section.get("de") and section.get("vers"):
             phrase += f", de {nom_parle(section['de'])} à {nom_parle(section['vers'])}"
         if section.get("depart") and section.get("arrivee"):
@@ -51,6 +53,8 @@ def _etape(section):
         return phrase
     if section.get("mode") == "walking" and (section.get("duree_s") or 0) >= 60:
         return f"à pied, {duree_parlee(section['duree_s'])}"
+    if section.get("mode") == "car":
+        return f"en voiture jusqu'à {nom_parle(section.get('vers') or 'la gare')}, environ {duree_parlee(section['duree_s'])}"
     return None
 
 
