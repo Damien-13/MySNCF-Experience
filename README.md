@@ -226,9 +226,10 @@ Calculés par `lib/analyse.py`, avec les mêmes filtres pour les trois indicateu
 
 - **Sites** : culture, tourisme et événements. Les gares, arrêts et stations vélo sont des moyens d'y aller, pas des sites.
   Un événement ne compte que s'il a une période qui croise la **Période** choisie (par défaut, les 12 prochains mois).
-- **Sites à 5 km ou moins d'une gare** : leur part et leur nombre (« accessibles sans voiture » : à pied, à vélo ou en bus).
-- **Zones blanches** : part des sites à plus de 15 km d'une gare, ou sans gare connue.
-- **IAF (Indice d'Accessibilité Ferroviaire, 0-100)** : même définition que l'EDA, moyenne pondérée des sites selon leur distance
+- **Accès depuis la gare** (les trois indicateurs et le graphe « Comment rejoindre les sites depuis la gare »), selon la distance à vol d'oiseau
+  à la gare la plus proche : **à pied** jusqu'à 1,5 km, **en transport en commun** de 1,5 à 30 km, **voiture obligatoire** au-delà de 30 km
+  ou sans gare connue (il faudrait plusieurs transports en commun) : c'est une zone blanche.
+- **IAF (Indice d'Accessibilité Ferroviaire, 0-100, expliqué par l'icône ⓘ du graphe)** : même définition que l'EDA, moyenne pondérée des sites selon leur distance
   à vol d'oiseau à la gare la plus proche (≤ 1 km = 1, 1-5 km = 0,5, 5-25 km = 0,1, au-delà = 0). La ligne « France » est calculée
   avec les mêmes filtres, hors département et destination.
 - **Saisonnalité** : événements qui commencent chaque mois de la période, dans les départements et la destination choisis.
