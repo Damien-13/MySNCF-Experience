@@ -228,6 +228,9 @@ l'ajouter à `ETAPES` dans `transformation.py`. Relançable sans risque : les do
 - **Gare relais** : si la gare de départ n'a pas de train direct vers l'arrivée mais qu'une gare proche en a (Aix-en-Provence → Aix-en-Provence TGV),
   une option de plus prend le car jusqu'à cette gare (horaires des réseaux de bus de la base, le dernier car qui arrive au moins 10 min avant le train),
   sinon la voiture (durée estimée), puis le train le plus direct (Aix TGV → Paris sans repasser par Marseille).
+- **Ordre des options**, comme Waze : l'heure d'arrivée, avec une pénalité de 20 minutes par correspondance (un train de plus, c'est un billet de plus)
+  et d'une minute par kilomètre qui éloigne de la destination. Un détour qui ne fait gagner que quelques minutes passe derrière ;
+  étiquettes « Le plus rapide », « Le plus écologique », « Le moins de correspondances », « Le moins de distance ».
 - **Détail d'une option** : chaque étape avec son service et son numéro (« TGV INOUI 6120 », « TER ZOU ! 880139 », « RER C », « Bus AIX - AEROPORT »),
   ses horaires, ses gares de départ et d'arrivée et son retard annoncé, puis la fin du trajet jusqu'au lieu.
 - Limite : l'API SNCF ne connaît ni le métro ni les correspondances à pied entre gares non déclarées (Gare de Lyon → Austerlitz) : dans Paris,

@@ -36,6 +36,10 @@ RAYON_ALENTOURS_KM = 0.5
 RAYON_POI_KM = 5.0
 MAX_POI = 60            # par catégorie : le dashboard filtre ensuite sans nouvelle recherche
 MAX_TRAJETS = 3
+# Classement des options, comme Waze : l'heure d'arrivée, plus une pénalité par correspondance (un train de plus, c'est un billet de plus)
+# et par kilomètre qui éloigne de la destination (Aix TGV → Marseille pour aller à Paris). Un détour qui ne fait gagner que quelques minutes passe derrière.
+PENALITE_CORRESPONDANCE_MIN = 20
+PENALITE_RECUL_MIN_PAR_KM = 1
 DELAI_RETOUR = timedelta(hours=1)           # le retour part au moins une heure après l'aller (le temps de trajet sera ajouté plus tard)
 HEURES = range(5, 24)                       # heures proposées dans les menus
 FENETRE_API_JOURS = 30                     # l'API SNCF ne connaît les horaires que ~30 jours en avant
@@ -273,11 +277,48 @@ def style_ligne(section):
     return {"cle": cle, "libelle": libelle, "couleur": couleur, "tirets": tirets}
 
 
+def _km_lonlat(a, b):
+    return math.hypot((b[1] - a[1]) * KM_PAR_DEGRE_LAT, (b[0] - a[0]) * 111.32 * math.cos(math.radians(a[1])))
+
+
+def _vehicules(trajet):
+    """Sections en train, car, bus ou voiture d'un trajet, avec leurs positions de départ et d'arrivée."""
+    return [s for s in trajet.get("sections", []) if (s["type"] == "public_transport" or s.get("mode") == "car") and s.get("de_lonlat") and s.get("vers_lonlat")]
+
+
+def distance_km(trajet):
+    """Distance parcourue en train, car, bus ou voiture : arrêt par arrêt quand l'API les donne, sinon en ligne droite. None sans section localisée."""
+    sections = _vehicules(trajet)
+    if not sections:
+        return None
+    total = 0.0
+    for s in sections:
+        points = [tuple(p) for p in (s.get("arrets_lonlat") or [])] or [tuple(s["de_lonlat"]), tuple(s["vers_lonlat"])]
+        total += sum(_km_lonlat(a, b) for a, b in zip(points, points[1:]))
+    return total
+
+
+def recul_km(trajet):
+    """Kilomètres perdus par les étapes qui éloignent de la destination (fin du dernier véhicule) : 0 pour un trajet qui ne fait que s'en rapprocher."""
+    sections = _vehicules(trajet)
+    if not sections:
+        return 0.0
+    fin = tuple(sections[-1]["vers_lonlat"])
+    return sum(max(0.0, _km_lonlat(tuple(s["vers_lonlat"]), fin) - _km_lonlat(tuple(s["de_lonlat"]), fin)) for s in sections)
+
+
+def cout(trajet):
+    """Coût d'une option pour la classer (plus petit = mieux) : heure d'arrivée en minutes, plus les pénalités de correspondance et de recul."""
+    arrivee = pd.Timestamp(trajet["arrivee"]).timestamp() / 60
+    return arrivee + PENALITE_CORRESPONDANCE_MIN * trajet["correspondances"] + PENALITE_RECUL_MIN_PAR_KM * recul_km(trajet)
+
+
 # Étiquettes des options d'un trajet, comme dans Waze : (texte, icône Font Awesome, couleur, valeur à minimiser).
 CRITERES_ETIQUETTES = (
     ("Le plus rapide", "fa-bolt", "#0072b2", lambda t: round(t["duree_s"] / 60) if t.get("duree_s") is not None else None),      # à la minute affichée
     ("Le plus écologique", "fa-leaf", "#2e7d32", lambda t: round(t["co2_g"] / 100) if t.get("co2_g") is not None else None),   # à 0,1 kg affiché
     ("Le moins de correspondances", "fa-route", "#d55e00", lambda t: t.get("correspondances")),
+    ("Le moins de distance", "fa-ruler", "#6a3d9a", lambda t: round(distance_km(t) / 5) if distance_km(t) is not None else None),         # à 5 km près
 )
 
 
@@ -378,9 +419,9 @@ def _trajets(depart, arrivee, quand, nombre):
 
 
 def _le_plus_direct(trains):
-    """Parmi les trains proposés à la gare relais, celui qui a le moins de correspondances, puis qui arrive le plus tôt :
-    depuis Aix TGV, le TGV direct pour Paris plutôt qu'un aller-retour par Marseille (un billet de plus). None s'il n'y en a pas."""
-    return min(trains, key=lambda t: (t["correspondances"], t["arrivee"])) if trains else None
+    """Parmi les trains proposés à la gare relais, le meilleur selon cout() : depuis Aix TGV, le TGV direct pour Paris plutôt qu'un aller-retour
+    par Marseille (un billet de plus) qui n'arrive que 26 minutes plus tôt. None s'il n'y en a pas."""
+    return min(trains, key=cout) if trains else None
 
 
 def _via_relais(engine, depart, relais, arrivee, quand, retour=False):
@@ -402,10 +443,10 @@ def _via_relais(engine, depart, relais, arrivee, quand, retour=False):
 
 
 def _fusionner(directs, via):
-    """Les MAX_TRAJETS premiers trajets par heure d'arrivée, en gardant toujours l'option par la gare relais si elle existe."""
-    tous = sorted(directs + via, key=lambda t: (t["arrivee"], t["correspondances"]))[:MAX_TRAJETS]
+    """Les MAX_TRAJETS meilleures options selon cout() (comme Waze : l'option 1 est la recommandée), en gardant toujours l'option par la gare relais."""
+    tous = sorted(directs + via, key=cout)[:MAX_TRAJETS]
     if via and not any(t.get("via") for t in tous):
-        tous = sorted(tous[:MAX_TRAJETS - 1] + via[:1], key=lambda t: (t["arrivee"], t["correspondances"]))
+        tous = sorted(tous[:MAX_TRAJETS - 1] + via[:1], key=cout)
     return tous
 
 

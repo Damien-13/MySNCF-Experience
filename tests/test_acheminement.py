@@ -137,7 +137,10 @@ def test_rechercher_une_ville_et_l_option_par_la_gare_relais(engine, monkeypatch
 def test_a_la_gare_relais_le_train_le_plus_direct(engine, monkeypatch):
     monkeypatch.setattr(acheminement, "MIN_TRAINS_RELAIS", 1)
     heure = datetime.combine(JOUR, datetime.min.time()) + timedelta(hours=14, minutes=36)
-    par_marseille = {**_trajet_api((5.3175, 43.4552), (2.3744, 48.8443), heure), "correspondances": 1}          # arrive plus tôt, mais repasse par Marseille
+    vers_marseille = _trajet_api((5.3175, 43.4552), (5.3802, 43.3027), heure, "9830")["sections"][0]
+    vers_paris = _trajet_api((5.3802, 43.3027), (2.3744, 48.8443), heure + timedelta(minutes=26), "6168")["sections"][0]
+    par_marseille = {**_trajet_api((5.3175, 43.4552), (2.3744, 48.8443), heure), "correspondances": 1,
+                     "sections": [vers_marseille, vers_paris]}                                                # arrive plus tôt, mais repasse par Marseille
     direct = _trajet_api((5.3175, 43.4552), (2.3744, 48.8443), heure + timedelta(minutes=50), "6132")
     direct["arrivee"] = par_marseille["arrivee"] + timedelta(minutes=26)
     monkeypatch.setattr(navitia, "itineraires", lambda a, b, quand=None, nombre=3: [] if a.endswith("01") else [par_marseille, direct])
@@ -145,6 +148,21 @@ def test_a_la_gare_relais_le_train_le_plus_direct(engine, monkeypatch):
     (via,) = [t for t in r["trajets"] if t.get("via")]
     assert via["sections"][-1]["numero"] == "6132" and via["correspondances"] == 1          # le car, puis le TGV direct
     assert via["sections"][1]["depart"].strftime("%H:%M") == "13:40"                         # le dernier car qui arrive avant le TGV
+
+
+def test_classement_comme_waze_et_le_moins_de_distance():
+    heure = datetime(2026, 10, 27, 18, 0)
+    vers_marseille = _trajet_api((5.3175, 43.4552), (5.3802, 43.3027), heure, "9830")["sections"][0]
+    vers_paris = _trajet_api((5.3802, 43.3027), (2.3744, 48.8443), heure, "6168")["sections"][0]
+    direct = _trajet_api((5.3175, 43.4552), (2.3744, 48.8443), heure, "6132")
+    detour = {**direct, "correspondances": 1, "sections": [vers_marseille, vers_paris], "arrivee": direct["arrivee"] - timedelta(minutes=26), "duree_s": direct["duree_s"] - 26 * 60}
+    assert itineraire.recul_km(direct) == 0 and 10 < itineraire.recul_km(detour) < 30                     # Aix TGV → Marseille éloigne de Paris
+    assert itineraire.distance_km(detour) > itineraire.distance_km(direct)
+    assert itineraire.cout(direct) < itineraire.cout(detour)                       # 26 minutes gagnées ne valent pas un train de plus vers le sud
+    beaucoup_plus_tot = {**detour, "arrivee": direct["arrivee"] - timedelta(hours=2)}
+    assert itineraire.cout(beaucoup_plus_tot) < itineraire.cout(direct)          # deux heures gagnées : le détour passe devant
+    noms = [[e[0] for e in lot] for lot in itineraire.etiquettes_trajets([detour, direct])]
+    assert "Le moins de distance" in noms[1] and "Le moins de correspondances" in noms[1] and noms[0] == ["Le plus rapide"]
 
 
 def test_noms_des_services_et_des_gares():
