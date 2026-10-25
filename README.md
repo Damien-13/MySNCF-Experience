@@ -227,7 +227,7 @@ l'ajouter à `ETAPES` dans `transformation.py`. Relançable sans risque : les do
   sinon la plus desservie : Aix-en-Provence → Paris arrive à Paris Gare de Lyon).
 - **Gare relais** : si la gare de départ n'a pas de train direct vers l'arrivée mais qu'une gare proche en a (Aix-en-Provence → Aix-en-Provence TGV),
   une option de plus prend le car jusqu'à cette gare (horaires des réseaux de bus de la base, le dernier car qui arrive au moins 10 min avant le train),
-  sinon la voiture (durée estimée), puis le train.
+  sinon la voiture (durée estimée), puis le train le plus direct (Aix TGV → Paris sans repasser par Marseille).
 - **Détail d'une option** : chaque étape avec son service et son numéro (« TGV INOUI 6120 », « TER ZOU ! 880139 », « RER C », « Bus AIX - AEROPORT »),
   ses horaires, ses gares de départ et d'arrivée et son retard annoncé, puis la fin du trajet jusqu'au lieu.
 - Limite : l'API SNCF ne connaît ni le métro ni les correspondances à pied entre gares non déclarées (Gare de Lyon → Austerlitz) : dans Paris,

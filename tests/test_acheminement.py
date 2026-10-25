@@ -134,6 +134,19 @@ def test_rechercher_une_ville_et_l_option_par_la_gare_relais(engine, monkeypatch
     assert len(via) == 1 and [s["mode"] for s in via[0]["sections"]][:3] == ["walking", "bus", "walking"]
 
 
+def test_a_la_gare_relais_le_train_le_plus_direct(engine, monkeypatch):
+    monkeypatch.setattr(acheminement, "MIN_TRAINS_RELAIS", 1)
+    heure = datetime.combine(JOUR, datetime.min.time()) + timedelta(hours=14, minutes=36)
+    par_marseille = {**_trajet_api((5.3175, 43.4552), (2.3744, 48.8443), heure), "correspondances": 1}          # arrive plus tôt, mais repasse par Marseille
+    direct = _trajet_api((5.3175, 43.4552), (2.3744, 48.8443), heure + timedelta(minutes=50), "6132")
+    direct["arrivee"] = par_marseille["arrivee"] + timedelta(minutes=26)
+    monkeypatch.setattr(navitia, "itineraires", lambda a, b, quand=None, nombre=3: [] if a.endswith("01") else [par_marseille, direct])
+    r = itineraire.rechercher(1, "ville:Paris|75", quand=datetime.combine(JOUR, datetime.min.time()) + timedelta(hours=13), engine=engine)
+    (via,) = [t for t in r["trajets"] if t.get("via")]
+    assert via["sections"][-1]["numero"] == "6132" and via["correspondances"] == 1          # le car, puis le TGV direct
+    assert via["sections"][1]["depart"].strftime("%H:%M") == "13:40"                         # le dernier car qui arrive avant le TGV
+
+
 def test_noms_des_services_et_des_gares():
     assert itineraire.libelle_section({"ligne": "TGV INOUI", "numero": "6120"}) == "TGV INOUI 6120"
     assert itineraire.libelle_section({"ligne": "RER", "numero": "FECA", "code": "D"}) == "RER D"

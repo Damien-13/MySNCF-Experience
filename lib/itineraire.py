@@ -377,21 +377,28 @@ def _trajets(depart, arrivee, quand, nombre):
     return navitia.itineraires(navitia.id_gare(depart["code_uic"]), navitia.id_gare(arrivee["code_uic"]), quand=quand, nombre=nombre)
 
 
+def _le_plus_direct(trains):
+    """Parmi les trains proposés à la gare relais, celui qui a le moins de correspondances, puis qui arrive le plus tôt :
+    depuis Aix TGV, le TGV direct pour Paris plutôt qu'un aller-retour par Marseille (un billet de plus). None s'il n'y en a pas."""
+    return min(trains, key=lambda t: (t["correspondances"], t["arrivee"])) if trains else None
+
+
 def _via_relais(engine, depart, relais, arrivee, quand, retour=False):
-    """Trajet par la gare relais : car (ou voiture) jusqu'au relais puis train ; au retour, train jusqu'au relais puis car. [] si l'API ne trouve rien."""
+    """Trajet par la gare relais : car (ou voiture) jusqu'au relais puis le train le plus direct ; au retour, ce train jusqu'au relais puis car.
+    [] si l'API ne trouve rien."""
     if not retour:
         quand = quand or datetime.now()
         avant = acheminement.acheminer(engine, depart, relais, quand)
-        trains = _trajets(relais, arrivee, avant[-1]["arrivee"] + acheminement.MARGE_CORRESPONDANCE, 1)
-        if not trains:
+        train = _le_plus_direct(_trajets(relais, arrivee, avant[-1]["arrivee"] + acheminement.MARGE_CORRESPONDANCE, MAX_TRAJETS))
+        if train is None:
             return []
-        train = next(s for s in trains[0]["sections"] if s["type"] == "public_transport")       # le dernier car qui arrive à temps : moins d'attente au relais
-        avant = acheminement.acheminer(engine, depart, relais, quand, au_plus_tard=train["depart"] - acheminement.MARGE_CORRESPONDANCE) or avant
-        return [acheminement.assembler(avant, trains[0])]
-    trains = _trajets(arrivee, relais, quand, 1)
-    if not trains:
+        premier = next(s for s in train["sections"] if s["type"] == "public_transport")       # le dernier car qui arrive à temps : moins d'attente au relais
+        avant = acheminement.acheminer(engine, depart, relais, quand, au_plus_tard=premier["depart"] - acheminement.MARGE_CORRESPONDANCE) or avant
+        return [acheminement.assembler(avant, train)]
+    train = _le_plus_direct(_trajets(arrivee, relais, quand, MAX_TRAJETS))
+    if train is None:
         return []
-    return [acheminement.assembler([], trains[0], acheminement.acheminer(engine, relais, depart, trains[0]["arrivee"] + acheminement.MARGE_CORRESPONDANCE))]
+    return [acheminement.assembler([], train, acheminement.acheminer(engine, relais, depart, train["arrivee"] + acheminement.MARGE_CORRESPONDANCE))]
 
 
 def _fusionner(directs, via):
