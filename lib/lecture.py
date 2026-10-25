@@ -5,7 +5,7 @@ pour l'onglet Itinéraire ; les trois indicateurs pour l'onglet Analyse. Les phr
 
 Usage :
     resume_itineraire(r, {"sens": "aller", "index": 0})      # r : le résultat de lib.itineraire.rechercher(), tel que le garde le dashboard (store-resultat)
-    resume_analyse("52,1 %", "127 688", "17,1 %")
+    resume_analyse("30,2 %", "41,5 %", "28,3 %")
 """
 import re
 from datetime import datetime
@@ -106,12 +106,13 @@ def resume_itineraire(r, selection=None):
     return " ".join(parties)
 
 
-def resume_analyse(couverture, sites, blanches):
-    """Résumé de l'onglet Analyse : les trois indicateurs, tels qu'affichés (textes)."""
-    if any(str(v).strip() in ("", "—") for v in (couverture, sites, blanches)):        # le tiret du dashboard : aucun site ou base indisponible
+def resume_analyse(pied, transport, voiture):
+    """Résumé de l'onglet Analyse : les trois indicateurs, tels qu'affichés (textes) : parts des sites accessibles à pied,
+    en transport en commun, en voiture obligatoire."""
+    if any(str(v).strip() in ("", "—") for v in (pied, transport, voiture)):        # le tiret du dashboard : aucun site ou base indisponible
         return "Analyse de la couverture ferroviaire. Aucun chiffre disponible pour ces filtres."
-    couverture, blanches = (str(v).replace(".", ",") for v in (couverture, blanches))     # virgule décimale : la voix française dit « virgule », pas « point »
+    pied, transport, voiture = (str(v).replace(".", ",") for v in (pied, transport, voiture))     # virgule décimale : la voix française dit « virgule », pas « point »
     return ("Analyse de la couverture ferroviaire. "
-            f"Sites à 5 kilomètres ou moins d'une gare : {couverture}. "
-            f"Sites accessibles sans voiture : {sites}. "
-            f"Zones blanches, à plus de 15 kilomètres d'une gare : {blanches}.")
+            f"Sites accessibles à pied, à un kilomètre et demi ou moins d'une gare : {pied}. "
+            f"Sites accessibles en transport en commun, entre un kilomètre et demi et 30 kilomètres d'une gare : {transport}. "
+            f"Zones blanches, à plus de 30 kilomètres, où la voiture est obligatoire : {voiture}.")

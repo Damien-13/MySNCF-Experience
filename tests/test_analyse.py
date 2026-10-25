@@ -18,13 +18,13 @@ from lib.analyse import Filtres
 from lib.db.connection import get_engine
 from lib.db.models import Evenement, EvenementLieu, EvenementPeriode, Lieu
 
-# Département 13 : 6 sites à 0,5 / 3 / 10 / 20 km, sans gare, et un festival en juillet 2026 ; département 84 : un site à 0,5 km.
+# Département 13 : 6 sites à 0,5 / 3 / 10 / 40 km, sans gare, et un festival en juillet 2026 ; département 84 : un site à 0,5 km.
 LIEUX = [
     dict(id=1, type="gare", nom="Gare", departement="13", lat=43.3, lon=5.4),
     dict(id=10, type="culture", nom="Musée de l'Olivier", departement="13", distance_gare_km=0.5, gare_proche_id=1),
     dict(id=11, type="culture", nom="Musée B", departement="13", distance_gare_km=3.0, gare_proche_id=1),
     dict(id=12, type="tourisme", nom="Calanque", departement="13", distance_gare_km=10.0, gare_proche_id=1),
-    dict(id=13, type="tourisme", nom="Mont", departement="13", distance_gare_km=20.0, gare_proche_id=1),
+    dict(id=13, type="tourisme", nom="Mont", departement="13", distance_gare_km=40.0, gare_proche_id=1),
     dict(id=14, type="tourisme", nom="Île", departement="13"),
     dict(id=15, type="evenement", nom="Festival d'été", departement="13", distance_gare_km=0.5, gare_proche_id=1),
     dict(id=20, type="culture", nom="Théâtre", departement="84", distance_gare_km=0.5, gare_proche_id=1),
@@ -46,20 +46,19 @@ def engine(monkeypatch):
         yield get_engine()
 
 
-def test_indicateurs_sans_stations_velo_ni_gares(engine):
+def test_indicateurs_a_pied_en_transport_en_commun_ou_en_voiture(engine):
     kpi = analyse.indicateurs(engine, Filtres())
     assert kpi["total"] == 7                                  # ni la gare ni la station vélo
-    assert kpi["sans_voiture"] == 4 and kpi["part_sans_voiture"] == round(100 * 4 / 7, 1)
-    assert kpi["part_zones_blanches"] == round(100 * 2 / 7, 1)  # 20 km et sans gare
-    assert kpi["part_sans_voiture"] + kpi["part_zones_blanches"] != 100
+    assert (kpi["pied"], kpi["tc"], kpi["voiture"]) == (3, 2, 2)     # 0,5 km ×3 ; 3 et 10 km ; 40 km et sans gare
+    assert kpi["part_pied"] == round(100 * 3 / 7, 1) and kpi["part_tc"] == round(100 * 2 / 7, 1) and kpi["part_voiture"] == round(100 * 2 / 7, 1)
 
 
 def test_iaf_pondere_comme_l_eda_et_france_calculee(engine):
     deps, france = analyse.iaf_departements(engine, Filtres(categorie="tous"))
     assert list(deps["departement"]) == ["13"]                # le 84 a moins de 5 sites
-    # 0,5 km → 1 ; 3 km → 0,5 ; 10 km → 0,1 ; 20 km → 0,1 ; sans gare → 0 ; festival 0,5 km → 1
-    assert deps.iloc[0]["iaf"] == round(100 * 2.7 / 6, 1)
-    assert france == round(100 * 3.7 / 7, 1)
+    # 0,5 km → 1 ; 3 km → 0,5 ; 10 km → 0,1 ; 40 km → 0 ; sans gare → 0 ; festival 0,5 km → 1
+    assert deps.iloc[0]["iaf"] == round(100 * 2.6 / 6, 1)
+    assert france == round(100 * 3.6 / 7, 1)
     _, france_13 = analyse.iaf_departements(engine, Filtres(departements=["13"]))
     assert france_13 == france                                 # la référence France ignore le département choisi
 
@@ -86,9 +85,11 @@ def test_saisonnalite_filtree_et_dans_l_ordre(engine):
     assert analyse.saisonnalite(engine, Filtres(categorie="culture")).empty
 
 
-def test_plan_action_et_tranches(engine):
+def test_plan_action_et_acces(engine):
     plan = analyse.plan_action(engine, Filtres(departements=["13"]), mode="pires", limite=2)
     assert list(plan["SITE TOURISTIQUE"]) == ["Mont", "Calanque"]
-    assert list(plan["PRIORITÉ"]) == ["Urgente", "Élevée"]
-    tranches = analyse.tranches_distance(engine, Filtres(categorie="tourisme"))
-    assert dict(zip(tranches["tranche"], tranches["sites"])) == {"5-15 km (Navette)": 1, "> 15 km (Voiture)": 2}
+    assert list(plan["PRIORITÉ"]) == ["Urgente", "Moyenne"] and list(plan["DERNIER KM"]) == ["Voiture obligatoire", "Transport en commun"]
+    meilleurs = analyse.plan_action(engine, Filtres(departements=["13"]), mode="meilleurs", limite=4)
+    assert list(meilleurs["DERNIER KM"]) == ["À pied", "À pied", "Transport en commun", "Transport en commun"]
+    acces = analyse.acces_sites(engine, Filtres(categorie="tourisme"))
+    assert dict(zip(acces["acces"], acces["sites"])) == {"tc": 1, "voiture": 2}               # Calanque à 10 km ; Mont à 40 km et Île sans gare

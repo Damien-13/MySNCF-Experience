@@ -208,6 +208,7 @@ custom_spinner = html.Div([
 # ==============================================================================
 CATEGORIES_SITES = {"culture": "Musée / culture", "tourisme": "Tourisme", "evenement": "Festival / événement"}
 COULEURS_SITES = {"culture": COLORBLIND_PALETTE[0], "tourisme": "#984ea3", "evenement": COLORBLIND_PALETTE[1]}
+ACCES_AXE = {k: v.replace(" (", "<br>(") for k, v in analyse.ACCES.items()}      # le seuil sous le nom, pour que les étiquettes tiennent sous les barres
 KPI_VIDE = "—"          # affiché quand aucun site ne correspond ou que la base est indisponible (jamais de chiffres inventés)
 
 def filtres_analyse(categorie, departements, destination, debut, fin):
@@ -490,7 +491,7 @@ def mise_en_page():
                     dbc.Row(className="mt-2 align-items-center", children=[
                         dbc.Col(
                             html.Div([
-                                html.Span(id="drilldown-text", children="💡 Cliquez sur un point du Graphe 1 pour zoomer (Drill-down)", className="text-muted small italic me-2"),
+                                html.Span(id="drilldown-text", children="", className="text-muted small italic me-2"),
                                 dbc.Button("✖ Réinitialiser le filtre", id="btn-reset-drilldown", color="danger", size="sm", outline=True, style={"display": "none", "fontSize": "0.75rem", "padding": "2px 8px"}, n_clicks=0)
                             ], id="drilldown-status", className="d-flex align-items-center"),
                             width=8, className="text-start"
@@ -509,27 +510,27 @@ def mise_en_page():
                     dbc.Row(className="g-3 mb-3", children=[
                         dbc.Col(dbc.Card(id="card-kpi-global-1", className="kpi-card", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "borderTopColor": "#10b981", **transition_style}, children=[dbc.CardBody(className="py-2 px-3", children=[
                             html.Div([
-                                html.H6("Sites à 5 km ou moins d'une gare", className="text-uppercase text-muted fw-bold m-0 me-1", style={"fontSize": "0.7rem"}),
+                                html.H6("Accessibles à pied (≤ 1,5 km)", className="text-uppercase text-muted fw-bold m-0 me-1", style={"fontSize": "0.7rem"}),
                                 html.I(className="fa-solid fa-circle-info text-muted", id="tooltip-kpi-1-target", style={"fontSize": "0.75rem", "cursor": "pointer"}),
-                                dbc.Tooltip("Part des sites (culture, tourisme, événements de la période) situés à 5 km ou moins, à vol d'oiseau, de la gare la plus proche.", target="tooltip-kpi-1-target", placement="top")
+                                dbc.Tooltip("Part des sites (culture, tourisme, événements de la période) à 1,5 km ou moins d'une gare, à vol d'oiseau : une vingtaine de minutes à pied.", target="tooltip-kpi-1-target", placement="top")
                             ], className="d-flex align-items-center mb-1"),
                             html.H4(id="t2-kpi-couverture", children=KPI_VIDE, style={"color": "#10b981", "fontWeight": "bold", "margin": "0"})
                         ])]), width=4),
                     
                         dbc.Col(dbc.Card(id="card-kpi-global-2", className="kpi-card", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "borderTopColor": COLORBLIND_PALETTE[1], **transition_style}, children=[dbc.CardBody(className="py-2 px-3", children=[
                             html.Div([
-                                html.H6("Sites accessibles sans voiture", className="text-uppercase text-muted fw-bold m-0 me-1", style={"fontSize": "0.7rem"}),
+                                html.H6("Transport en commun (1,5 à 30 km)", className="text-uppercase text-muted fw-bold m-0 me-1", style={"fontSize": "0.7rem"}),
                                 html.I(className="fa-solid fa-circle-info text-muted", id="tooltip-kpi-2-target", style={"fontSize": "0.75rem", "cursor": "pointer"}),
-                                dbc.Tooltip("Nombre de sites à 5 km ou moins d'une gare : joignables à pied, à vélo ou en bus depuis le train. Les stations vélo et arrêts ne sont pas comptés comme sites.", target="tooltip-kpi-2-target", placement="top")
+                                dbc.Tooltip("Part des sites entre 1,5 et 30 km d'une gare, à vol d'oiseau.", target="tooltip-kpi-2-target", placement="top")
                             ], className="d-flex align-items-center mb-1"),
                             html.H4(id="t2-kpi-sites", children=KPI_VIDE, style={"color": COLORBLIND_PALETTE[1], "fontWeight": "bold", "margin": "0"})
                         ])]), width=4),
                     
                         dbc.Col(dbc.Card(id="card-kpi-global-3", className="kpi-card", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], "borderTopColor": CARMILLON, **transition_style}, children=[dbc.CardBody(className="py-2 px-3", children=[
                             html.Div([
-                                html.H6("Zones blanches (> 15 km d'une gare)", className="text-uppercase text-muted fw-bold m-0 me-1", style={"fontSize": "0.7rem"}),
+                                html.H6("Zones blanches : voiture obligatoire (> 30 km)", className="text-uppercase text-muted fw-bold m-0 me-1", style={"fontSize": "0.7rem"}),
                                 html.I(className="fa-solid fa-circle-info text-muted", id="tooltip-kpi-3-target", style={"fontSize": "0.75rem", "cursor": "pointer"}),
-                                dbc.Tooltip("Part des sites à plus de 15 km d'une gare, ou sans gare connue : il faut une navette dédiée ou une voiture.", target="tooltip-kpi-3-target", placement="top")
+                                dbc.Tooltip("Part des sites à plus de 30 km d'une gare, ou sans gare connue : il faudrait plusieurs transports en commun, la voiture est obligatoire.", target="tooltip-kpi-3-target", placement="top")
                             ], className="d-flex align-items-center mb-1"),
                             html.H4(id="t2-kpi-blanches", children=KPI_VIDE, style={"color": CARMILLON, "fontWeight": "bold", "margin": "0"})
                         ])]), width=4),
@@ -540,9 +541,18 @@ def mise_en_page():
                         # COLONNE GAUCHE : GRAPHE 1
                         dbc.Col([
                             dbc.Card(id="card-g1", className="dash-card p-2", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], **transition_style}, children=[
+                                html.Div(className="d-flex align-items-center px-2 pt-1", children=[
+                                    html.Span("Volume de sites × accessibilité ferroviaire par département", className="fw-bold me-2", style={"fontSize": "1.05rem"}),
+                                    html.I(className="fa-solid fa-circle-info text-muted", id="tooltip-g1-target", tabIndex=0, style={"cursor": "pointer"}, **{"aria-label": "Qu'est-ce que l'IAF ?"}),
+                                    dbc.Tooltip([html.B("IAF : Indice d'Accessibilité Ferroviaire (0 à 100). "),
+                                                 "Moyenne des sites du département pondérée par leur distance à la gare la plus proche : ",
+                                                 "1 à 1 km ou moins, 0,5 jusqu'à 5 km, 0,1 jusqu'à 25 km, 0 au-delà. 100 = tous les sites à pied d'une gare. ",
+                                                 "La ligne pointillée est l'IAF de la France. ", html.Br(),
+                                                 "Cliquez sur un département pour filtrer tout l'onglet."], target="tooltip-g1-target", placement="right"),
+                                ]),
                                 html.Div(
                                     role="region",
-                                    children=[dcc.Graph(id="graph-1", style={"height": "480px"})],
+                                    children=[dcc.Graph(id="graph-1", style={"height": "450px"})],
                                     **{"aria-label": "Volume de sites x accessibilité ferroviaire, par département"}
                                 )
                             ])
@@ -551,10 +561,18 @@ def mise_en_page():
                         # COLONNE DROITE : GRAPHE 3 & 4 EMPILÉS
                         dbc.Col([
                             dbc.Card(id="card-g3", className="dash-card p-2 mb-3", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], **transition_style}, children=[
+                                html.Div(className="d-flex align-items-center px-2 pt-1", children=[
+                                    html.Span("Comment rejoindre les sites depuis la gare", className="fw-bold me-2", style={"fontSize": "1.05rem"}),
+                                    html.I(className="fa-solid fa-circle-info text-muted", id="tooltip-g3-target", tabIndex=0, style={"cursor": "pointer"}, **{"aria-label": "Comment les sites sont classés"}),
+                                    dbc.Tooltip([html.B("À pied : "), "une gare à 1,5 km ou moins.", html.Br(),
+                                                 html.B("Transport en commun : "), "entre 1,5 et 30 km d'une gare.", html.Br(),
+                                                 html.B("Voiture obligatoire : "), "au-delà de 30 km (ou sans gare connue) : il faudrait plusieurs transports en commun.", html.Br(),
+                                                 "Distances à vol d'oiseau jusqu'à la gare la plus proche."], target="tooltip-g3-target", placement="left"),
+                                ]),
                                 html.Div(
                                     role="region",
-                                    children=[dcc.Graph(id="graph-3", style={"height": "225px"})],
-                                    **{"aria-label": "Répartition des sites par tranche de distance"}
+                                    children=[dcc.Graph(id="graph-3", style={"height": "200px"})],
+                                    **{"aria-label": "Comment rejoindre les sites depuis la gare : à pied, en transport en commun ou en voiture obligatoire"}
                                 )
                             ]),
                             dbc.Card(id="card-g4-saison", className="dash-card p-2", style={"backgroundColor": init_colors["card_bg"], "color": init_colors["text"], **transition_style}, children=[
@@ -649,15 +667,15 @@ def export_report(n_clicks, regions, categorie, destination, debut, fin, kpi_cou
         <h2 style="font-size: 1.2rem; color: #495057;">Chiffres Clés d'Accessibilité Ferroviaire</h2>
         <div class="kpi-container">
             <div class="kpi-box" style="border-top-color: #10b981;">
-                <div class="kpi-title">Sites à 5 km ou moins d'une gare</div>
+                <div class="kpi-title">Accessibles à pied (≤ 1,5 km)</div>
                 <div class="kpi-value" style="color: #10b981;">{kpi_couv}</div>
             </div>
             <div class="kpi-box" style="border-top-color: #ff7f00;">
-                <div class="kpi-title">Sites accessibles sans voiture</div>
+                <div class="kpi-title">Transport en commun (1,5 à 30 km)</div>
                 <div class="kpi-value" style="color: #ff7f00;">{kpi_sites}</div>
             </div>
             <div class="kpi-box" style="border-top-color: #c71556;">
-                <div class="kpi-title">Zones blanches (> 15 km d'une gare)</div>
+                <div class="kpi-title">Zones blanches : voiture obligatoire (> 30 km)</div>
                 <div class="kpi-value" style="color: #c71556;">{kpi_blanc}</div>
             </div>
         </div>
@@ -848,7 +866,7 @@ def update_ui_and_graphs(theme_values, categorie, t2_clicks, table_mode, click_d
         drilldown_text = f"🎯 Filtre actif : {label_reg}"
         btn_reset_style = {"display": "inline-block", "fontSize": "0.75rem", "padding": "2px 8px"}
     else:
-        drilldown_text = "💡 Cliquez sur un point du Graphe 1 pour zoomer (Drill-down)"
+        drilldown_text = ""
         btn_reset_style = {"display": "none", "fontSize": "0.75rem", "padding": "2px 8px"}
 
     filtres = filtres_analyse(categorie, selected_regions, t2_arrivee, t2_debut, t2_fin)
@@ -860,14 +878,14 @@ def update_ui_and_graphs(theme_values, categorie, t2_clicks, table_mode, click_d
         d, df_table = None, None
         vide = "Base de données indisponible : lancez src/initialize.py"
     kpi = d["kpi"] if d else None
-    kpi_couv = f"{kpi['part_sans_voiture']} %" if kpi else KPI_VIDE
-    kpi_sites = f"{kpi['sans_voiture']:,}".replace(",", " ") if kpi else KPI_VIDE
-    kpi_blanc = f"{kpi['part_zones_blanches']} %" if kpi else KPI_VIDE
+    kpi_couv = f"{kpi['part_pied']} %" if kpi else KPI_VIDE
+    kpi_sites = f"{kpi['part_tc']} %" if kpi else KPI_VIDE
+    kpi_blanc = f"{kpi['part_voiture']} %" if kpi else KPI_VIDE
     
     # --------------------------------------------------------------------------
     # GRAPHE 1 : Scatter Plot (Pleine Hauteur Gauche)
     # --------------------------------------------------------------------------
-    titre1 = "<b>Volume de sites × accessibilité ferroviaire par département</b>"
+    titre1 = None                      # titre et aide (IAF) au-dessus du graphe, dans la carte
     df_iaf = d["departements"] if d else pd.DataFrame()
     if df_iaf.empty:
         fig1 = figure_vide(vide, layout_shared)
@@ -900,19 +918,19 @@ def update_ui_and_graphs(theme_values, categorie, t2_clicks, table_mode, click_d
     # --------------------------------------------------------------------------
     # GRAPHE 3 : Répartition par Tranche de Distance (Haut Droite)
     # --------------------------------------------------------------------------
-    titre3 = "<b>Répartition des sites par tranche de distance</b>"
-    df_distance = d["distances"] if d else pd.DataFrame()
+    titre3 = None                      # titre et aide au-dessus du graphe, dans la carte
+    df_distance = d["acces"] if d else pd.DataFrame()
     if df_distance.empty:
         fig3 = figure_vide(vide, layout_shared)
         fig3.update_layout(title=titre3)
     else:
         df_distance = df_distance.assign(categorie=df_distance["type"].map(CATEGORIES_SITES))
         fig3 = px.bar(
-            df_distance, x="tranche", y="sites", color="categorie",
+            df_distance.assign(acces=df_distance["acces"].map(ACCES_AXE)), x="acces", y="sites", color="categorie",
             color_discrete_map={CATEGORIES_SITES[t]: c for t, c in COULEURS_SITES.items()},
             title=titre3,
-            labels={"tranche": "Transport recommandé", "sites": "Sites", "categorie": "Catégorie"},
-            category_orders={"tranche": analyse.TRANCHES, "categorie": list(CATEGORIES_SITES.values())}
+            labels={"acces": "Accès depuis la gare", "sites": "Sites", "categorie": "Catégorie"},
+            category_orders={"acces": list(ACCES_AXE.values()), "categorie": list(CATEGORIES_SITES.values())}
         )
         fig3.update_traces(hovertemplate="Catégorie : %{fullData.name}<br>Nombre : %{y}<extra></extra>")
         fig3.update_layout(**layout_shared, barmode="stack", yaxis_rangemode="tozero")
