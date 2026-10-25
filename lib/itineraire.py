@@ -323,8 +323,9 @@ CRITERES_ETIQUETTES = (
 
 
 def etiquettes_trajets(trajets):
-    """Pour chaque trajet, la liste des étiquettes (texte, icône, couleur) qu'il mérite : le plus rapide, le plus écologique, le moins de correspondances.
-    Une étiquette n'est donnée que si elle départage les options (si toutes sont à égalité, elle n'apprendrait rien) ; ex æquo : tous les meilleurs l'ont."""
+    """Pour chaque trajet, la liste des étiquettes (texte, icône, couleur) qu'il mérite : le plus rapide, le plus écologique, le moins de correspondances,
+    le moins de distance. Une étiquette n'est donnée que si elle départage les options (si toutes sont à égalité, elle n'apprendrait rien),
+    et à une seule option : ex æquo, celle qui a le moins de correspondances, puis la plus courte."""
     etiquettes = [[] for _ in trajets]
     if len(trajets) < 2:
         return etiquettes
@@ -334,9 +335,9 @@ def etiquettes_trajets(trajets):
         if len(set(connues)) < 2:
             continue
         meilleur = min(connues)
-        for i, v in enumerate(valeurs):
-            if v == meilleur:
-                etiquettes[i].append((texte, icone, couleur))
+        ex_aequo = [i for i, v in enumerate(valeurs) if v == meilleur]
+        choisi = min(ex_aequo, key=lambda i: (trajets[i].get("correspondances") or 0, trajets[i].get("duree_s") or 0))
+        etiquettes[choisi].append((texte, icone, couleur))
     return etiquettes
 
 

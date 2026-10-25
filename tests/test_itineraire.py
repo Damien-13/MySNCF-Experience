@@ -169,7 +169,11 @@ def test_etiquettes_des_options_comme_waze():
     assert itineraire.etiquettes_trajets(trajets[:1]) == [[]]                                  # une seule option : rien à comparer
     exaequo = [{"duree_s": 3600, "co2_g": None, "correspondances": 2}, {"duree_s": 3600, "co2_g": None, "correspondances": 0}, {"duree_s": 4000, "co2_g": None, "correspondances": 0}]
     noms = [[e[0] for e in lot] for lot in itineraire.etiquettes_trajets(exaequo)]
-    assert noms == [["Le plus rapide"], ["Le plus rapide", "Le moins de correspondances"], ["Le moins de correspondances"]]     # ex æquo : les deux l'ont ; CO₂ inconnu : ignoré
+    assert noms == [[], ["Le plus rapide", "Le moins de correspondances"], []]     # ex æquo : une seule option l'a (moins de correspondances, puis la plus courte) ; CO₂ inconnu : ignoré
+    ecolos = [{"duree_s": 3600, "co2_g": 1500, "correspondances": 1}, {"duree_s": 4000, "co2_g": 1500, "correspondances": 0},
+              {"duree_s": 3000, "co2_g": 1500, "correspondances": 0}, {"duree_s": 3000, "co2_g": 2000, "correspondances": 2}]
+    noms = [[e[0] for e in lot] for lot in itineraire.etiquettes_trajets(ecolos)]
+    assert sum("Le plus écologique" in n for n in noms) == 1 and "Le plus écologique" in noms[2]           # même CO₂ : la moins de correspondances, puis la plus courte
 
 
 def test_filtre_culture_ne_garde_que_la_culture(engine):
