@@ -199,10 +199,11 @@ def get_departements_options():
         return []
 
 def spinner(texte):
+    """Indicateur de chargement : le train au milieu, le texte juste en dessous (sur toute la largeur de la zone qui charge)."""
     return html.Div([
-        html.I(className="fa-solid fa-train-subway fa-beat-fade me-3", style={"color": CARMILLON, "fontSize": "2rem"}),
+        html.I(className="fa-solid fa-train-subway fa-beat-fade", style={"color": CARMILLON, "fontSize": "2rem"}),
         html.Div(texte, className="mt-2 text-muted fw-bold")
-    ], className="text-center p-3")
+    ], className="d-flex flex-column align-items-center justify-content-center text-center p-3", style={"width": "100%"})
 
 custom_spinner = spinner("Recherche en cours...")
 spinner_analyse = spinner("Calcul en cours...")
@@ -447,7 +448,7 @@ def mise_en_page():
                                             html.Div(id="suivi-etat", style={"fontSize": "0.75rem", "opacity": 0.8, "width": "100%"}),
                                         ]),
                                         html.Div(id="poi-legend", className="mb-2"),
-                                        dcc.Loading(type="circle", color=CARMILLON, children=html.Div(id="options-trajets", children=html.Div("Choisissez une gare de départ et une destination, puis lancez la recherche.", className="text-muted"))),
+                                        html.Div(id="options-trajets", children=html.Div("Choisissez une gare de départ et une destination, puis lancez la recherche.", className="text-muted")),       # le chargement s'affiche au milieu de la carte
                                     ])]),
                                 ]),
 
