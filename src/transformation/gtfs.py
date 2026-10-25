@@ -8,6 +8,8 @@ Rattachement des arrêts : un arrêt dont le code UIC est celui d'une gare de la
 reçoivent leur propre lieu (type « arret_bus » pour un car, `type_lieu` sinon : « arret_train » par défaut, « arret_bus » pour les réseaux urbains), avec leur gare la plus proche si elle est à moins de DISTANCE_GARE_MAX_KM (donc pas pour les arrêts à l'étranger).
 Sans code UIC (réseaux étrangers, Île-de-France), `rayon_gare_m` permet de rattacher un arrêt par sa position : parmi les gares à moins de ce rayon,
 la plus proche dont le nom est compatible (mot en commun), à défaut la plus proche si elle est à moins de DISTANCE_SANS_NOM_M mètres.
+Un mot distinctif (MOTS_DISTINCTIFS, « TGV ») doit être dans les deux noms : la gare TGV d'une ville n'est pas sa gare du centre. Si la position de l'arrêt
+est fausse (Trenitalia place « Aix-en-Provence-TGV » au centre d'Aix), la gare compatible est cherchée par son nom jusqu'à RAYON_NOM_M mètres.
 Seuls les arrêts desservis par au moins une circulation sont gardés (les zones d'arrêt qui ne servent qu'au regroupement sont donc écartées).
 """
 import re
@@ -32,6 +34,8 @@ DISTANCE_GARE_MAX_KM = 50          # au-delà, un arrêt n'a pas de gare « proc
 PAQUET_LECTURE = 1_000_000          # lignes de stop_times lues à la fois
 PAQUET_TRANCHE = 100_000            # lignes converties et insérées à la fois
 DISTANCE_SANS_NOM_M = 50          # sans nom compatible, un arrêt n'est rattaché à une gare que si elle est à moins de cette distance
+MOTS_DISTINCTIFS = {"tgv"}
+RAYON_NOM_M = 30_000              # gare à chercher par son nom quand l'arrêt porte un mot distinctif et que sa position est fausse
 MOTS_BANALS = {"gare", "saint", "sainte", "les", "des", "aeroport", "paris", "sncf", "rer"}
 FICHIERS = ["routes", "trips", "stops"]
 FICHIERS_FACULTATIFS = ["calendar", "calendar_dates"]      # selon les réseaux : jours par semaine, jours ajoutés ou retirés, ou les deux
@@ -214,10 +218,17 @@ def rattacher_par_position(arrets, gares, rayon_m):
     ids, noms = gares["id"].to_numpy(), [mots(n) for n in gares["nom"]]
     arbre = cKDTree(plat(gares))
     resultat = []
+    def compatible_avec(m, k):
+        return bool(m & noms[k]) and (m & MOTS_DISTINCTIFS) == (noms[k] & MOTS_DISTINCTIFS)
     for position, nom in zip(plat(arrets), arrets["nom"]):
+        m = mots(nom)
         voisines = sorted(arbre.query_ball_point(position, rayon_m), key=lambda k: np.hypot(*(arbre.data[k] - position)))
-        compatible = next((k for k in voisines if mots(nom) & noms[k]), None)
-        proche = voisines[0] if voisines and np.hypot(*(arbre.data[voisines[0]] - position)) <= DISTANCE_SANS_NOM_M else None
+        compatible = next((k for k in voisines if compatible_avec(m, k)), None)
+        if compatible is None and m & MOTS_DISTINCTIFS:
+            loin = sorted(arbre.query_ball_point(position, RAYON_NOM_M), key=lambda k: np.hypot(*(arbre.data[k] - position)))
+            compatible = next((k for k in loin if compatible_avec(m, k)), None)
+        proche = (voisines[0] if voisines and np.hypot(*(arbre.data[voisines[0]] - position)) <= DISTANCE_SANS_NOM_M
+                  and (m & MOTS_DISTINCTIFS) <= noms[voisines[0]] else None)
         choix = compatible if compatible is not None else proche
         resultat.append(None if choix is None else int(ids[choix]))
     return resultat
