@@ -269,7 +269,7 @@ def generate_decision_table(theme="light", df_table=None):
 # ==============================================================================
 HAUTEUR_CARTE = "max(640px, calc(100vh - 240px))"      # toute la hauteur de l'écran sous les KPI, pour ne pas avoir à descendre
 # Panneau des trajets (par-dessus la carte, à droite du panneau de recherche) et bouton pour le rouvrir.
-STYLE_PANNEAU = {"position": "absolute", "top": "16px", "right": "16px", "width": "325px", "maxHeight": "calc(100% - 32px)", "overflowY": "auto", "zIndex": "1000",
+STYLE_PANNEAU = {"position": "absolute", "top": "16px", "right": "16px", "width": "420px", "maxHeight": "calc(100% - 32px)", "overflowY": "auto", "overflowX": "hidden", "zIndex": "1000",
                  "borderRadius": "15px", "boxShadow": "0px 4px 15px rgba(0,0,0,0.3)"}
 STYLE_OUVRIR = {"position": "absolute", "top": "16px", "right": "16px", "zIndex": "1000", "backgroundColor": CARMILLON, "border": "none", "fontWeight": "bold",
                 "boxShadow": "0px 4px 15px rgba(0,0,0,0.3)"}
