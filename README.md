@@ -68,6 +68,7 @@ python src/initialize.py
 
 Crée la base (SQLite, `data/mysncf.db`), télécharge les sources dans `data/`, puis les nettoie et les charge.
 Le premier lancement prend plusieurs dizaines de minutes. Relançable sans risque : ce qui est déjà téléchargé ou à jour n'est pas refait.
+À la fin, les données brutes de `data/` sont supprimées (environ 10 Go) : seule la base est gardée. Une nouvelle initialisation retélécharge alors les sources. Pour les garder, mettre `PURGE_DONNEES=0` dans le `.env`.
 
 ### 6. Lancer le dashboard
 
