@@ -116,6 +116,5 @@ def resume_analyse(couverture, sites, blanches):
         return "Analyse de la couverture ferroviaire. Aucun chiffre disponible pour ces filtres."
     couverture, blanches = (str(v).replace(".", ",") for v in (couverture, blanches))     # virgule décimale : la voix française dit « virgule », pas « point »
     return ("Analyse de la couverture ferroviaire. "
-            f"Sites à 5 kilomètres ou moins d'une gare : {couverture}. "
-            f"Sites accessibles sans voiture : {sites}. "
-            f"Zones blanches, à plus de 15 kilomètres d'une gare : {blanches}.")
+            f"Sites accessibles à pied, à 1 kilomètre et demi ou moins d'une gare : {couverture}, soit {sites} sites. "
+            f"Zones blanches, que seule la voiture permet d'atteindre depuis la gare : {blanches}.")
