@@ -1,0 +1,24 @@
+services:
+  app:
+    build: .
+    image: mysncf-experience
+    ports:
+      - "8050:8050"
+    env_file: .env
+    environment:
+      DATABASE_URL: sqlite:///data/mysncf.db
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+
+  # Construit la base sur une machine neuve : docker compose --profile init run --rm init
+  init:
+    build: .
+    image: mysncf-experience
+    profiles: ["init"]
+    env_file: .env
+    environment:
+      DATABASE_URL: sqlite:///data/mysncf.db
+    volumes:
+      - ./data:/app/data
+    command: ["python", "src/initialize.py"]

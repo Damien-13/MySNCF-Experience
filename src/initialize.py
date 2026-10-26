@@ -18,6 +18,7 @@ from sqlalchemy.engine import make_url
 import migration
 import transformation
 from lib.downloader import download
+from purge import purger
 
 # Sources nécessaires à l'application : le nom court, sans DATASET_ ni _URL (« basilic » pour DATASET_BASILIC_URL du .env).
 # Ce sont celles que lit la transformation (src/transformation/) : en ajouter une avec son étape.
@@ -59,6 +60,7 @@ def initialize():
     create_database()
     download_data()
     load_data()
+    purger(DATA, SOURCES)
 
 
 if __name__ == "__main__":

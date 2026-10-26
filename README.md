@@ -43,6 +43,8 @@ source .venv/bin/activate          # Windows : .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+Pour ouvrir les notebooks de `src/EDA/` (facultatif) : `pip install -r requirements-eda.txt`.
+
 ### 4. Configurer le `.env`
 
 ```bash
@@ -67,6 +69,7 @@ python src/initialize.py
 
 Crée la base (SQLite, `data/mysncf.db`), télécharge les sources dans `data/`, puis les nettoie et les charge.
 Le premier lancement prend plusieurs dizaines de minutes. Relançable sans risque : ce qui est déjà téléchargé ou à jour n'est pas refait.
+À la fin, les données brutes de `data/` sont supprimées (environ 10 Go) : seule la base est gardée. Une nouvelle initialisation retélécharge alors les sources. Pour les garder, mettre `PURGE_DONNEES=0` dans le `.env`.
 
 ### 6. Lancer le dashboard
 
@@ -75,6 +78,30 @@ python src/app.py
 ```
 
 Puis ouvrir [http://localhost:8050](http://localhost:8050).
+
+#### Lancer avec Docker (facultatif)
+
+Il faut Docker Desktop (avec au moins 4 Go de mémoire) et le `.env` rempli.
+
+Si la base existe déjà dans `data/` :
+
+```bash
+docker compose up --build
+```
+
+Puis ouvrir [http://localhost:8050](http://localhost:8050). Le premier chargement des horaires prend un peu de temps.
+
+Sinon, construire d'abord la base (plusieurs dizaines de minutes) :
+
+```bash
+docker compose --profile init run --rm init
+```
+
+Pour arrêter :
+
+```bash
+docker compose down
+```
 
 ### 7. Lancer les tests (facultatif)
 
@@ -128,7 +155,8 @@ MySNCF-Experience/
 ├── data/                                           Sources téléchargées et base générée (non versionnées)
 ├── assets/                                         Logo, images des trains et des bus, captures du README
 ├── .env.example                                    Modèle de configuration (à copier en .env)
-└── requirements.txt                                Dépendances Python
+├── requirements.txt                                Dépendances Python
+└── requirements-eda.txt                            Dépendances des notebooks (facultatif)
 ```
 
 Le code suit une séparation stricte : `lib/` ne connaît pas Dash (testable seul), `src/app.py` ne fait que l'affichage, et chaque

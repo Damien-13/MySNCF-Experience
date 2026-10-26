@@ -1,0 +1,7 @@
+# Notebooks d'analyse exploratoire (src/EDA), en plus de requirements.txt
+jupyter
+ipykernel
+pyarrow
+matplotlib
+seaborn
+scikit-learn
