@@ -6,25 +6,32 @@ Un événement ne compte que s'il a une période qui croise la période choisie 
 Indice d'Accessibilité Ferroviaire (IAF, 0-100) : même définition que l'EDA (src/EDA/eda_recap.ipynb), moyenne pondérée des sites
 selon leur distance à vol d'oiseau à la gare la plus proche (POIDS_TRANCHES). Un site sans gare connue vaut 0.
 
+Accès depuis la gare la plus proche (ACCES, graphe 2 et KPI) : à pied jusqu'à SEUIL_PIED_KM ; au-delà, en transport en commun si on peut rejoindre le site
+depuis la gare avec au plus une correspondance (lieu.acces_tc, calculé par src/transformation/acces_tc.py) ; sinon voiture seule (zone blanche), comme les sites sans gare.
+
+Filtres d'exploration : « gares » garde les sites dont la gare la plus proche est dans la liste (gares joignables en train depuis la gare de départ,
+voir lib/desserte.py) ; « acces » garde un mode d'accès (clic sur le graphe 2). La référence France ignore les filtres de lieu (départements,
+destination, gares, mode d'accès) mais garde la catégorie et la période.
+
 Les requêtes sont paramétrées (aucune valeur saisie n'est collée dans le SQL). Une base absente lève une exception : à l'appelant
 de l'afficher, jamais de données inventées à la place.
 
     from lib.analyse import Filtres, donnees
     d = donnees(engine, Filtres(categorie="culture", departements=["13"], debut="2026-10-23", fin="2027-10-23"))
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import pandas as pd
 import sqlalchemy as sa
 
 # Poids de l'IAF par tranche de distance (km, poids), comme POIDS_TRANCHES dans l'EDA ; au-delà de la dernière tranche, 0.
 POIDS_TRANCHES = [(1, 1.0), (5, 0.5), (25, 0.1)]
-SEUIL_SANS_VOITURE_KM = 5            # à pied, à vélo ou en bus depuis la gare
-SEUIL_ZONE_BLANCHE_KM = 15           # au-delà : navette dédiée ou voiture
+SEUIL_PIED_KM = 1.5                  # à pied depuis la gare
+SEUIL_NAVETTE_KM = 15                # rapport : distance où une navette depuis la gare reste réaliste
 MIN_SITES_DEPARTEMENT = 5            # un département avec moins de sites n'apparaît pas sur le graphe 1 (IAF trop instable)
 
 TYPES_PAR_CATEGORIE = {"tous": ["culture", "tourisme", "evenement"], "culture": ["culture"], "tourisme": ["tourisme"], "evenement": ["evenement"]}
-TRANCHES = ["≤ 1,5 km (Pied)", "1,5-5 km (Vélo/Bus)", "5-15 km (Navette)", "> 15 km (Voiture)"]
+ACCES = ["À pied (≤ 1,5 km)", "Transport en commun", "Voiture seule"]
 MOIS = ["Jan", "Fév", "Mar", "Avr", "Mai", "Juin", "Juil", "Août", "Sept", "Oct", "Nov", "Déc"]
 
 
@@ -35,6 +42,8 @@ class Filtres:
     destination: str | None = None    # nom exact d'un site
     debut: str | None = None          # période (AAAA-MM-JJ) : seuls les événements qui la croisent comptent
     fin: str | None = None
+    gares: list | None = None         # id des gares les plus proches acceptées (None : toutes ; liste vide : aucune)
+    acces: str | None = None          # une valeur de ACCES
 
 
 def _iaf_sql(col="l.distance_gare_km"):
@@ -42,18 +51,25 @@ def _iaf_sql(col="l.distance_gare_km"):
     return f"ROUND(100.0 * AVG(CASE {cas} ELSE 0 END), 1)"
 
 
-def _where(f, departements=True, destination=True):
-    """Clause WHERE sur lieu l et ses paramètres. departements/destination=False : la référence France ignore ces filtres."""
+def _where(f, local=True):
+    """Clause WHERE sur lieu l et ses paramètres. local=False : la référence France ignore les filtres de lieu."""
     types = TYPES_PAR_CATEGORIE.get(f.categorie, TYPES_PAR_CATEGORIE["tous"])
     params = {f"t{i}": t for i, t in enumerate(types)}
     conditions = [f"l.type IN ({', '.join(':' + k for k in params)})"]
-    if departements and f.departements:
+    if local and f.departements:
         deps = {f"d{i}": str(d) for i, d in enumerate(f.departements)}
         conditions.append(f"l.departement IN ({', '.join(':' + k for k in deps)})")
         params |= deps
-    if destination and f.destination:
+    if local and f.destination:
         conditions.append("l.nom = :destination")
         params["destination"] = f.destination
+    if local and f.gares is not None:
+        gares = {f"g{i}": int(g) for i, g in enumerate(f.gares)}
+        conditions.append(f"l.gare_proche_id IN ({', '.join(':' + k for k in gares)})" if gares else "0 = 1")
+        params |= gares
+    if local and f.acces:
+        conditions.append(f"{_acces_sql()} = :acces")
+        params["acces"] = f.acces
     if f.debut and f.fin:
         conditions.append("(l.type <> 'evenement' OR EXISTS (SELECT 1 FROM evenement_lieu el JOIN evenement_periode ep ON ep.evenement_id = el.evenement_id "
                           "WHERE el.lieu_id = l.id AND ep.date_debut <= :fin AND ep.date_fin >= :debut))")
@@ -61,19 +77,28 @@ def _where(f, departements=True, destination=True):
     return " AND ".join(conditions), params
 
 
+def _acces_sql():
+    """Mode d'accès d'un site depuis sa gare la plus proche (une valeur de ACCES)."""
+    return (f"CASE WHEN l.distance_gare_km <= {SEUIL_PIED_KM} THEN '{ACCES[0]}' "
+            f"WHEN l.acces_tc THEN '{ACCES[1]}' ELSE '{ACCES[2]}' END")
+
+
 def indicateurs(engine, f):
-    """Les trois KPI : part des sites à 5 km ou moins d'une gare, leur nombre, part des zones blanches (> 15 km ou sans gare). None si aucun site."""
+    """Les KPI : part des sites à 1,5 km ou moins d'une gare (et leur nombre), part des sites joignables en transport en commun,
+    part des zones blanches (voiture seule). Les trois parts font 100 %. None si aucun site."""
     where, params = _where(f)
     r = pd.read_sql(sa.text(f"""
         SELECT COUNT(*) AS total,
-               SUM(CASE WHEN l.distance_gare_km <= {SEUIL_SANS_VOITURE_KM} THEN 1 ELSE 0 END) AS proches,
-               SUM(CASE WHEN l.distance_gare_km > {SEUIL_ZONE_BLANCHE_KM} OR l.distance_gare_km IS NULL THEN 1 ELSE 0 END) AS blancs
+               SUM(CASE WHEN {_acces_sql()} = '{ACCES[0]}' THEN 1 ELSE 0 END) AS a_pied,
+               SUM(CASE WHEN {_acces_sql()} = '{ACCES[1]}' THEN 1 ELSE 0 END) AS tc,
+               SUM(CASE WHEN {_acces_sql()} = '{ACCES[2]}' THEN 1 ELSE 0 END) AS blancs
         FROM lieu l WHERE {where}"""), engine, params=params).iloc[0]
     total = int(r["total"] or 0)
     if not total:
         return None
-    proches, blancs = int(r["proches"] or 0), int(r["blancs"] or 0)
-    return {"total": total, "sans_voiture": proches, "part_sans_voiture": round(100 * proches / total, 1), "part_zones_blanches": round(100 * blancs / total, 1)}
+    a_pied, tc, blancs = int(r["a_pied"] or 0), int(r["tc"] or 0), int(r["blancs"] or 0)
+    return {"total": total, "a_pied": a_pied, "part_a_pied": round(100 * a_pied / total, 1), "part_tc": round(100 * tc / total, 1),
+            "part_zones_blanches": round(100 * blancs / total, 1)}
 
 
 def iaf_departements(engine, f):
@@ -84,20 +109,16 @@ def iaf_departements(engine, f):
         SELECT l.departement AS departement, COUNT(*) AS sites, {_iaf_sql()} AS iaf
         FROM lieu l WHERE {where} AND l.departement IS NOT NULL
         GROUP BY l.departement HAVING COUNT(*) >= :seuil"""), engine, params=params | {"seuil": seuil})
-    where_fr, params_fr = _where(f, departements=False, destination=False)
+    where_fr, params_fr = _where(f, local=False)
     france = pd.read_sql(sa.text(f"SELECT {_iaf_sql()} AS iaf FROM lieu l WHERE {where_fr}"), engine, params=params_fr).iloc[0]["iaf"]
     return deps, (None if pd.isna(france) else float(france))
 
 
-def tranches_distance(engine, f):
-    """Graphe 3 : nombre de sites par tranche de distance à la gare et par type. Les sites sans gare connue sont mis au-delà de 15 km."""
+def modes_acces(engine, f):
+    """Graphe 2 : nombre de sites par mode d'accès depuis la gare la plus proche (ACCES) et par type. Les sites sans gare connue sont en voiture seule."""
     where, params = _where(f)
     return pd.read_sql(sa.text(f"""
-        SELECT CASE WHEN l.distance_gare_km <= 1.5 THEN '{TRANCHES[0]}'
-                    WHEN l.distance_gare_km <= 5 THEN '{TRANCHES[1]}'
-                    WHEN l.distance_gare_km <= 15 THEN '{TRANCHES[2]}'
-                    ELSE '{TRANCHES[3]}' END AS tranche,
-               l.type AS type, COUNT(*) AS sites
+        SELECT {_acces_sql()} AS acces, l.type AS type, COUNT(*) AS sites
         FROM lieu l WHERE {where} GROUP BY 1, 2"""), engine, params=params)
 
 
@@ -106,7 +127,7 @@ def saisonnalite(engine, f):
     Un mois par ligne, dans l'ordre du calendrier (étiquette « Oct 2026 »). Vide si la catégorie exclut les événements."""
     if "evenement" not in TYPES_PAR_CATEGORIE.get(f.categorie, TYPES_PAR_CATEGORIE["tous"]):
         return pd.DataFrame(columns=["mois", "evenements"])
-    where, params = _where(Filtres("evenement", f.departements, f.destination))
+    where, params = _where(replace(f, categorie="evenement", debut=None, fin=None))
     periode = ""
     if f.debut and f.fin:
         periode = "AND ep.date_debut BETWEEN :debut AND :fin"
@@ -127,9 +148,7 @@ def plan_action(engine, f, mode="pires", limite=10):
     return pd.read_sql(sa.text(f"""
         SELECT l.nom AS "SITE TOURISTIQUE",
                COALESCE(g.nom, 'Gare inconnue') || ' (' || ROUND(l.distance_gare_km, 1) || ' km)' AS "GARE LA + PROCHE",
-               CASE WHEN l.distance_gare_km <= 1.5 THEN 'Piéton / VLS'
-                    WHEN l.distance_gare_km <= 5 THEN 'Bus / Navette'
-                    ELSE 'Voiture requise' END AS "DERNIER KM",
+               {_acces_sql()} AS "DERNIER KM",
                CASE WHEN l.distance_gare_km > 15 THEN 'Urgente'
                     WHEN l.distance_gare_km > 5 THEN 'Élevée'
                     WHEN l.distance_gare_km > 1.5 THEN 'Moyenne'
@@ -137,6 +156,26 @@ def plan_action(engine, f, mode="pires", limite=10):
         FROM lieu l LEFT JOIN lieu g ON l.gare_proche_id = g.id
         WHERE {where} AND l.distance_gare_km IS NOT NULL
         ORDER BY l.distance_gare_km {ordre} LIMIT :limite"""), engine, params=params | {"limite": limite})
+
+
+def zones_blanches_departements(engine, f, limite=5):
+    """Rapport : départements qui comptent le plus de sites en voiture seule (département, sites, voiture_seule)."""
+    where, params = _where(f)
+    return pd.read_sql(sa.text(f"""
+        SELECT l.departement AS departement, COUNT(*) AS sites, SUM(CASE WHEN {_acces_sql()} = '{ACCES[2]}' THEN 1 ELSE 0 END) AS voiture_seule
+        FROM lieu l WHERE {where} AND l.departement IS NOT NULL
+        GROUP BY l.departement ORDER BY voiture_seule DESC LIMIT :limite"""), engine, params=params | {"limite": limite})
+
+
+def gares_navette(engine, f, rayon_km=SEUIL_NAVETTE_KM, limite=5):
+    """Rapport : gares les plus proches d'un grand nombre de sites en voiture seule à rayon_km ou moins (gare, sites) :
+    les gares d'où une navette ou un car desservirait le plus de sites."""
+    where, params = _where(f)
+    return pd.read_sql(sa.text(f"""
+        SELECT g.nom AS gare, COUNT(*) AS sites
+        FROM lieu l JOIN lieu g ON g.id = l.gare_proche_id
+        WHERE {where} AND {_acces_sql()} = '{ACCES[2]}' AND l.distance_gare_km <= :rayon
+        GROUP BY g.id, g.nom ORDER BY sites DESC LIMIT :limite"""), engine, params=params | {"rayon": rayon_km, "limite": limite})
 
 
 def chercher_sites(engine, recherche, limite=50):
@@ -149,7 +188,7 @@ def chercher_sites(engine, recherche, limite=50):
 
 
 def donnees(engine, f):
-    """Tout l'onglet en une fois : {"kpi", "departements", "iaf_france", "distances", "saison"}. kpi vaut None si aucun site ne correspond."""
+    """Tout l'onglet en une fois : {"kpi", "departements", "iaf_france", "acces", "saison"}. kpi vaut None si aucun site ne correspond."""
     deps, france = iaf_departements(engine, f)
     return {"kpi": indicateurs(engine, f), "departements": deps, "iaf_france": france,
-            "distances": tranches_distance(engine, f), "saison": saisonnalite(engine, f)}
+            "acces": modes_acces(engine, f), "saison": saisonnalite(engine, f)}

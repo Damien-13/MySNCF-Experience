@@ -14,7 +14,8 @@ Un dashboard en deux onglets, construit sur les données ouvertes (SNCF, DATAtou
 
 - **Itinéraire voyageur** : de sa gare à un lieu ou un événement, les trains proposés, le tracé sur les voies, le dernier kilomètre
   (à pied, vélo, bus) et les trains qui roulent en direct sur la carte.
-- **Analyse de la couverture ferroviaire** : quels sites touristiques sont accessibles sans voiture, par département et par distance à la gare.
+- **Analyse de la couverture ferroviaire** : quels sites touristiques sont accessibles sans voiture (à pied ou en transport en commun depuis la gare),
+  par département, et où agir en priorité.
 
 ![Onglet Itinéraire voyageur](assets/readme/itineraire.jpg)
 
@@ -212,6 +213,9 @@ Une migration existante ne se modifie jamais : toute évolution est une nouvelle
 
 ### Sources
 
+Licences : SNCF (gares, horaires, voies) et OpenStreetMap en ODbL ; DATAtourisme et Ministère de la Culture (Basilic, festivals)
+en Licence Ouverte ; réseaux urbains en Licence Ouverte ou ODbL selon le réseau.
+
 Chaque source est une variable `DATASET_<SOURCE>_URL` du `.env`, téléchargée dans `data/<source>/` (les `.zip` sont décompressés).
 Les sources chargées par `src/initialize.py` sont la liste `SOURCES` de ce fichier ; les autres sont déclarées pour la suite du projet.
 
@@ -236,6 +240,7 @@ python src/transformation/transformation.py   # toutes les étapes dans l'ordre 
 | `evenement.py` · `festival.py` | DATAtourisme (événements), festivals | `evenement`, `evenement_lieu`, `evenement_periode`, `lieu` |
 | `velo.py` | stationnement cyclable, Vélib', Vélo'v | `lieu` (station_velo), `station_velo` |
 | `bus.py` | 21 réseaux urbains et Île-de-France Mobilités | tables de transport |
+| `acces_tc.py` | calculé à partir des étapes précédentes | `lieu.acces_tc` (site joignable en transport en commun depuis sa gare) |
 | `voies.py` · `trace_trajets.py` | voies du réseau ferré national (SNCF Réseau) | `troncon_voie`, `trace_trajet` |
 | `lignes_bus.py` | lignes de bus d'OpenStreetMap (extrait France, 5 Go) | `ligne_bus` |
 | `routes.py` | routes d'OpenStreetMap où un car peut passer (extrait France) | `troncon_route` |
@@ -269,14 +274,27 @@ l'ajouter à `ETAPES` dans `transformation.py`. Relançable sans risque : les do
 Calculés par `lib/analyse.py`, avec les mêmes filtres pour les trois indicateurs, les trois graphes, le plan d'action et le rapport exporté.
 
 - **Sites** : culture, tourisme et événements. Les gares, arrêts et stations vélo sont des moyens d'y aller, pas des sites.
-  Un événement ne compte que s'il a une période qui croise la **Période** choisie (par défaut, les 12 prochains mois).
-- **Sites à 5 km ou moins d'une gare** : leur part et leur nombre (« accessibles sans voiture » : à pied, à vélo ou en bus).
-- **Zones blanches** : part des sites à plus de 15 km d'une gare, ou sans gare connue.
+  Un événement ne compte que s'il a une période qui croise la **Période** choisie (par défaut, l'année écoulée jusqu'à aujourd'hui).
+- **Accès depuis la gare la plus proche** (distance à vol d'oiseau) :
+  - **À pied** : site à 1,5 km ou moins de la gare.
+  - **Transport en commun** : plus loin, mais joignable depuis la gare en bus, tram, métro, TER ou car TER, avec au plus une correspondance
+    (300 m à pied au plus entre deux arrêts) et 1,5 km de marche au plus à chaque bout. Calculé une fois par `src/transformation/acces_tc.py`.
+  - **Voiture seule** (zone blanche) : aucun des deux, ou pas de gare connue. Les cars régionaux et départementaux ne sont pas en base :
+    hors des 21 agglomérations et de l'Île-de-France, cette part est surestimée.
+- **Les trois KPI** : part des sites accessibles à pied, part joignable en transport en commun, part des zones blanches (elles font 100 %).
+  Sous chaque KPI, la moyenne France (même catégorie, même période) dès qu'un filtre de lieu est actif.
 - **IAF (Indice d'Accessibilité Ferroviaire, 0-100)** : même définition que l'EDA, moyenne pondérée des sites selon leur distance
   à vol d'oiseau à la gare la plus proche (≤ 1 km = 1, 1-5 km = 0,5, 5-25 km = 0,1, au-delà = 0). La ligne « France » est calculée
-  avec les mêmes filtres, hors département et destination.
-- **Saisonnalité** : événements qui commencent chaque mois de la période, dans les départements et la destination choisis.
-- Cliquer sur un département du graphe 1 le met dans le filtre « Région / Dép. » et filtre tout l'onglet.
+  avec la même catégorie et la même période, sans les filtres de lieu.
+- **Saisonnalité** : événements qui commencent chaque mois de la période. DATAtourisme ne garde que les événements en cours ou à venir :
+  les mois passés en comptent peu.
+- **Filtres** : gare de départ (sites dont la gare la plus proche est joignable en train ou car TER depuis elle, avec au plus une
+  correspondance : `lib/desserte.py`), destination, départements, mode d'accès, période, et la catégorie choisie dans l'onglet Itinéraire.
+  Chaque filtre actif s'affiche en puce et s'enlève seul ; « Réinitialiser » les remet tous à zéro.
+- **Graphes liés** (brushing & linking) : cliquer ou encadrer des départements sur le graphe 1, cliquer un mode d'accès sur le graphe 2
+  ou un mois sur le graphe 3 filtre tout l'onglet.
+- **Accessibilité** : couleurs contrastées dans les deux thèmes (WCAG), catégories doublées d'un motif, résumé textuel de chaque graphe
+  pour les lecteurs d'écran, tous les filtres utilisables au clavier, mise en page qui se réorganise au zoom.
 - Base absente ou aucun site pour ces filtres : l'onglet affiche « — » et un message, jamais de chiffres inventés.
 
 ## Lire les horaires (trains, bus, tram…)
