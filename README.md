@@ -42,6 +42,8 @@ source .venv/bin/activate          # Windows : .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+Pour ouvrir les notebooks de `src/EDA/` (facultatif) : `pip install -r requirements-eda.txt`.
+
 ### 4. Configurer le `.env`
 
 ```bash
@@ -151,7 +153,8 @@ MySNCF-Experience/
 ├── data/                                           Sources téléchargées et base générée (non versionnées)
 ├── assets/                                         Logo, images des trains et des bus, captures du README
 ├── .env.example                                    Modèle de configuration (à copier en .env)
-└── requirements.txt                                Dépendances Python
+├── requirements.txt                                Dépendances Python
+└── requirements-eda.txt                            Dépendances des notebooks (facultatif)
 ```
 
 Le code suit une séparation stricte : `lib/` ne connaît pas Dash (testable seul), `src/app.py` ne fait que l'affichage, et chaque
