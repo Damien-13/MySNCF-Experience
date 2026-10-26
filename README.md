@@ -10,16 +10,19 @@
 
 ---
 
-Un dashboard en deux onglets, construit sur les données ouvertes (SNCF, DATAtourisme, transport.data.gouv.fr…) et l'API SNCF :
+Un dashboard en trois onglets, construit sur les données ouvertes (SNCF, DATAtourisme, transport.data.gouv.fr…) et l'API SNCF :
 
 - **Itinéraire voyageur** : de sa gare à un lieu ou un événement, les trains proposés, le tracé sur les voies, le dernier kilomètre
   (à pied, vélo, bus) et les trains qui roulent en direct sur la carte.
 - **Analyse de la couverture ferroviaire** : quels sites touristiques sont accessibles sans voiture (à pied ou en transport en commun depuis la gare),
   par département, et où agir en priorité.
+- **Guide & Lexique** : définition des indicateurs et provenance des données.
 
 ![Onglet Itinéraire voyageur](assets/readme/itineraire.jpg)
 
 ![Onglet Analyse de la couverture ferroviaire](assets/readme/analyse.jpg)
+
+![Onglet Guide & Lexique](assets/readme/guide.jpg)
 
 ## Installation
 
@@ -58,6 +61,9 @@ Pour l'obtenir :
    (présentation de l'API sur [numerique.sncf.com/startup/api](https://numerique.sncf.com/startup/api/)).
 2. Récupérer la clé reçue par e-mail.
 3. La coller dans le `.env` : `NAVITIA_TOKEN=votre-clé`.
+
+Facultatif : `OPENROUTER_API_KEY` ([openrouter.ai/keys](https://openrouter.ai/keys)) fait rédiger par IA la synthèse du rapport exporté
+de l'onglet Analyse. Sans clé, la synthèse est construite à partir des indicateurs.
 
 Le `.env` n'est jamais versionné : le token reste sur votre machine.
 
@@ -114,11 +120,13 @@ pytest
 ```text
 MySNCF-Experience/
 ├── src/                                            Application
-│   ├── app.py                                      Dashboard Dash : mise en page des deux onglets et callbacks
+│   ├── app.py                                      Dashboard Dash : mise en page des trois onglets et callbacks
 │   ├── initialize.py                               Point d'entrée : crée la base, télécharge les sources, lance la transformation
+│   ├── purge.py                                    Supprime les données brutes de data/ une fois la base chargée
 │   ├── assets/                                     Fichiers chargés par le navigateur
 │   │   ├── trains.js                               Animation des trains sur la carte
 │   │   ├── lecture.js                              Bouton « Écouter » (voix du navigateur) et clavier
+│   │   ├── menus.css                               Menus déroulants
 │   │   └── trains.css
 │   ├── transformation/                             Nettoyage et chargement des données dans la base (un module par domaine)
 │   │   ├── transformation.py                       Lance toutes les étapes dans l'ordre
@@ -126,7 +134,8 @@ MySNCF-Experience/
 │   │   ├── sncf.py · transilien.py · bus.py …      Horaires de tous les réseaux (trains, bus, tram)
 │   │   ├── voies.py · trace_trajets.py             Tracé des voies et des trajets
 │   │   ├── lignes_bus.py · routes.py               Lignes de bus et routes d'OpenStreetMap (tracé des cars)
-│   │   └── geo.py · lieux.py                       Outils communs
+│   │   ├── acces_tc.py                             Sites joignables en transport en commun depuis leur gare
+│   │   └── geo.py · gtfs.py · lieux.py             Outils communs
 │   └── EDA/                                        Notebooks d'analyse exploratoire
 │
 ├── lib/                                            Bibliothèques réutilisées par l'application
@@ -137,6 +146,7 @@ MySNCF-Experience/
 │   ├── analyse.py                                  Chiffres de l'onglet Analyse (indicateurs, IAF, graphes, plan d'action)
 │   ├── itineraire.py                               Logique de l'onglet Itinéraire (recherche, trajets, dernier kilomètre)
 │   ├── acheminement.py                             Gare d'une ville, gare relais (Aix → Aix TGV) et car ou voiture pour la rejoindre
+│   ├── desserte.py                                 Gares joignables depuis une gare de départ (filtre Départ de l'onglet Analyse)
 │   ├── navitia.py                                  API SNCF : gares et itinéraires
 │   ├── reseau_ferre.py                             Réseau des voies et plus court chemin
 │   ├── trace_bus.py · reseau_routier.py            Tracé d'un car sur la route de sa ligne, sinon arrêt par arrêt
@@ -149,12 +159,13 @@ MySNCF-Experience/
 │
 ├── migrations/                                     Évolutions du schéma de la base (Alembic)
 │   ├── migration.py
-│   └── versions/                                   001_schema_initial, 002_troncon_voie, 003_trace_trajet, 004_ligne_bus, 005_troncon_route…
+│   └── versions/                                   001_schema_initial … 005_troncon_route, 006_lieu_acces_tc
 │
 ├── tests/                                          Un fichier de tests par fonctionnalité (pytest)
 ├── data/                                           Sources téléchargées et base générée (non versionnées)
 ├── assets/                                         Logo, images des trains et des bus, captures du README
 ├── .env.example                                    Modèle de configuration (à copier en .env)
+├── Dockerfile · docker-compose.yml                 Lancement avec Docker (facultatif)
 ├── requirements.txt                                Dépendances Python
 └── requirements-eda.txt                            Dépendances des notebooks (facultatif)
 ```
@@ -207,6 +218,8 @@ python migrations/migration.py --new "ajoute X"    # après avoir modifié lib/d
 ```
 
 Les migrations sont numérotées dans `migrations/versions/` (001, 002, 003…) : `--new` crée automatiquement le numéro suivant.
+Après un `git pull` qui apporte une nouvelle migration, lancer `python migrations/migration.py` sur sa base existante, puis l'étape de
+transformation qui remplit la nouvelle colonne s'il y en a une (pour 006 : `python src/transformation/acces_tc.py`, environ 5 minutes).
 Une migration existante ne se modifie jamais : toute évolution est une nouvelle migration, à relire avant de l'appliquer.
 
 ## Données
