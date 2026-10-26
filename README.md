@@ -75,6 +75,30 @@ python src/app.py
 
 Puis ouvrir [http://localhost:8050](http://localhost:8050).
 
+#### Lancer avec Docker (facultatif)
+
+Il faut Docker Desktop (avec au moins 4 Go de mémoire) et le `.env` rempli.
+
+Si la base existe déjà dans `data/` :
+
+```bash
+docker compose up --build
+```
+
+Puis ouvrir [http://localhost:8050](http://localhost:8050). Le premier chargement des horaires prend un peu de temps.
+
+Sinon, construire d'abord la base (plusieurs dizaines de minutes) :
+
+```bash
+docker compose --profile init run --rm init
+```
+
+Pour arrêter :
+
+```bash
+docker compose down
+```
+
 ### 7. Lancer les tests (facultatif)
 
 ```bash
