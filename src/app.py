@@ -106,7 +106,7 @@ app = dash.Dash(
     external_scripts=["https://cdn.jsdelivr.net/npm/date-fns@4.1.0/locale/fr/cdn.min.js"],
     suppress_callback_exceptions=True
 )
-app.title = "MySNCF Experience"
+app.title = "My Travel Experience"
 server = app.server        # point d'entrée WSGI pour gunicorn (Docker)
 
 app.index_string = '''
@@ -444,8 +444,8 @@ def generate_ai_analysis_summary(dept_label, kpi_couv, kpi_sites, kpi_blanc, df_
             "https://openrouter.ai/api/v1/chat/completions",
             headers={
                 "Authorization": f"Bearer {api_key}",
-                "HTTP-Referer": "https://mysncf-experience.sncf.fr",
-                "X-Title": "MySNCF Experience",
+                "HTTP-Referer": "https://github.com/Damien-13/MySNCF-Experience",
+                "X-Title": "My Travel Experience",
                 "Content-Type": "application/json"
             },
             json={
@@ -531,7 +531,7 @@ def mise_en_page():
         dbc.Row(id="top-bar", style={"backgroundColor": init_colors["card_bg"], "borderRadius": "12px", **transition_style}, className="px-3 py-2 mb-3 shadow-sm align-items-center justify-content-between", children=[
             dbc.Col(
                 html.Div([
-                    html.Img(id="logo-img", src=LOGO_SRC, alt="Logo MySNCF Experience", style={"maxHeight": "100px", "objectFit": "contain", "borderRadius": "6px", "padding": "2px", "marginRight": "15px"}),
+                    html.Img(id="logo-img", src=LOGO_SRC, alt="Logo My Travel Experience", style={"maxHeight": "100px", "objectFit": "contain", "borderRadius": "6px", "padding": "2px", "marginRight": "15px"}),
                     dbc.Tabs(
                         id="tabs-navigation",
                         active_tab="tab-2",
@@ -925,7 +925,7 @@ def export_report(n_clicks, regions, categorie, destination, debut, fin, kpi_cou
     </head>
     <body>
         <div class="header">
-            <h1 style="margin:0; font-size: 1.8rem;">MySNCF Experience — Rapport Métier d'Accessibilité</h1>
+            <h1 style="margin:0; font-size: 1.8rem;">My Travel Experience — Rapport Métier d'Accessibilité</h1>
             <p style="margin:8px 0 0 0; opacity: 0.9; font-size: 1rem;">Périmètre : {escape(perimetre)} | Édité le : {date.today().strftime('%d/%m/%Y')}</p>
         </div>
         

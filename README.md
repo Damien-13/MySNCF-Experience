@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="assets/logo%20MySNCF%20Experience.png" alt="Logo MySNCF Experience" width="140">
+  <img src="assets/logo%20My%20Travel%20Experience.png" alt="Logo My Travel Experience" width="140">
 </p>
 
-<h1 align="center">MySNCF Experience</h1>
+<h1 align="center">My Travel Experience</h1>
 
 <p align="center">
   Aller voir un musée, un site touristique ou un festival en train : trajet, dernier kilomètre et couverture ferroviaire des territoires.
