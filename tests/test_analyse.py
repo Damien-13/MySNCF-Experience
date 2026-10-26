@@ -18,11 +18,11 @@ from lib.analyse import Filtres
 from lib.db.connection import get_engine
 from lib.db.models import Evenement, EvenementLieu, EvenementPeriode, Lieu
 
-# Département 13 : 6 sites à 0,5 / 3 / 10 / 20 km, sans gare, et un festival en juillet 2026 ; département 84 : un site à 0,5 km.
+# Département 13 : 6 sites à 0,5 / 3 (relié en bus) / 10 / 20 km, sans gare, et un festival en juillet 2026 ; département 84 : un site à 0,5 km.
 LIEUX = [
     dict(id=1, type="gare", nom="Gare", departement="13", lat=43.3, lon=5.4),
     dict(id=10, type="culture", nom="Musée de l'Olivier", departement="13", distance_gare_km=0.5, gare_proche_id=1),
-    dict(id=11, type="culture", nom="Musée B", departement="13", distance_gare_km=3.0, gare_proche_id=1),
+    dict(id=11, type="culture", nom="Musée B", departement="13", distance_gare_km=3.0, gare_proche_id=1, acces_tc=True),
     dict(id=12, type="tourisme", nom="Calanque", departement="13", distance_gare_km=10.0, gare_proche_id=1),
     dict(id=13, type="tourisme", nom="Mont", departement="13", distance_gare_km=20.0, gare_proche_id=1),
     dict(id=14, type="tourisme", nom="Île", departement="13"),
@@ -49,9 +49,10 @@ def engine(monkeypatch):
 def test_indicateurs_sans_stations_velo_ni_gares(engine):
     kpi = analyse.indicateurs(engine, Filtres())
     assert kpi["total"] == 7                                  # ni la gare ni la station vélo
-    assert kpi["sans_voiture"] == 4 and kpi["part_sans_voiture"] == round(100 * 4 / 7, 1)
-    assert kpi["part_zones_blanches"] == round(100 * 2 / 7, 1)  # 20 km et sans gare
-    assert kpi["part_sans_voiture"] + kpi["part_zones_blanches"] != 100
+    assert kpi["a_pied"] == 3 and kpi["part_a_pied"] == round(100 * 3 / 7, 1)   # 1,5 km ou moins
+    assert kpi["part_zones_blanches"] == round(100 * 3 / 7, 1)  # 10 km et 20 km sans bus, et sans gare
+    assert kpi["part_tc"] == round(100 * 1 / 7, 1)                            # le musée relié en bus
+    assert kpi["part_a_pied"] + kpi["part_tc"] + kpi["part_zones_blanches"] == pytest.approx(100, abs=0.2)
 
 
 def test_iaf_pondere_comme_l_eda_et_france_calculee(engine):
@@ -90,5 +91,23 @@ def test_plan_action_et_tranches(engine):
     plan = analyse.plan_action(engine, Filtres(departements=["13"]), mode="pires", limite=2)
     assert list(plan["SITE TOURISTIQUE"]) == ["Mont", "Calanque"]
     assert list(plan["PRIORITÉ"]) == ["Urgente", "Élevée"]
-    tranches = analyse.tranches_distance(engine, Filtres(categorie="tourisme"))
-    assert dict(zip(tranches["tranche"], tranches["sites"])) == {"5-15 km (Navette)": 1, "> 15 km (Voiture)": 2}
+    assert list(plan["DERNIER KM"]) == ["Voiture seule", "Voiture seule"]
+    acces = analyse.modes_acces(engine, Filtres(categorie="culture"))
+    assert dict(zip(acces["acces"], acces["sites"])) == {"À pied (≤ 1,5 km)": 2, "Transport en commun": 1}
+    acces = analyse.modes_acces(engine, Filtres(categorie="tourisme"))
+    assert dict(zip(acces["acces"], acces["sites"])) == {"Voiture seule": 3}             # dont le site sans gare
+
+
+def test_filtres_gares_de_depart_et_mode_d_acces(engine):
+    assert analyse.indicateurs(engine, Filtres(gares=[1]))["total"] == 6          # tous les sites rattachés à la gare 1 (pas l'île sans gare)
+    assert analyse.indicateurs(engine, Filtres(gares=[])) is None                  # aucune gare joignable : aucun site
+    kpi = analyse.indicateurs(engine, Filtres(acces="Transport en commun"))
+    assert kpi["total"] == 1 and kpi["part_tc"] == 100
+    _, france = analyse.iaf_departements(engine, Filtres(acces="Voiture seule", gares=[1]))
+    assert france == round(100 * 3.7 / 7, 1)                                       # la référence France ignore ces filtres
+
+
+def test_rapport_zones_blanches_et_gares_navette(engine):
+    zb = analyse.zones_blanches_departements(engine, Filtres())
+    assert zb.iloc[0].to_dict() == {"departement": "13", "sites": 6, "voiture_seule": 3}
+    assert analyse.gares_navette(engine, Filtres()).to_dict("records") == [{"gare": "Gare", "sites": 1}]    # Calanque à 10 km ; le Mont à 20 km est trop loin
