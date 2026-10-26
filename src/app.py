@@ -1260,9 +1260,6 @@ def update_ui_and_graphs(theme_values, categorie, t2_clicks, table_mode, selecti
         if d["iaf_france"] is not None:
             fig1.add_hline(y=d["iaf_france"], line_dash="dash", line_color=palette["reference"], annotation_text=f"France : {d['iaf_france']:.0f}",
                            annotation_position="bottom right", annotation_font_color=palette["reference"])
-        if len(df_iaf) >= 10:                  # la lecture du graphe : en bas à droite, beaucoup de sites et loin des gares (inutile pour quelques points)
-            fig1.add_annotation(text="↘ beaucoup de sites, mal desservis : à prioriser", xref="paper", yref="paper", x=1, y=0, xanchor="right", yanchor="bottom",
-                                showarrow=False, font=dict(size=11, color=palette["alerte"]))
         fig1.update_layout(
             **layout_shared, showlegend=False, coloraxis_showscale=False,
             clickmode="event+select", dragmode="select",         # clic sur un point ou rectangle de sélection : filtre l'onglet
