@@ -96,6 +96,7 @@ app = dash.Dash(
     suppress_callback_exceptions=True
 )
 app.title = "MySNCF Experience"
+server = app.server        # point d'entrée WSGI pour gunicorn (Docker)
 
 app.index_string = '''
 <!DOCTYPE html>
@@ -1428,4 +1429,8 @@ def sprite_train(cle):
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(
+        host=os.getenv("DASH_HOST", "127.0.0.1"),
+        port=int(os.getenv("DASH_PORT", "8050")),
+        debug=os.getenv("DASH_DEBUG", "1").lower() not in ("0", "false", "no", ""),
+    )
