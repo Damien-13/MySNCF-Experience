@@ -188,6 +188,7 @@ PostgreSQL possible en changeant l'URL).
   │ ligne   │                                   │ lat, lon, commune      │
   └────┬────┘                                   │ gare_proche → lieu     │
        │ 1-n                                    │ distance_gare_km       │
+       │                                        │ acces_tc               │
   ┌────┴────────┐   ┌────────────┐              └──┬──────┬──────┬───────┘
   │ circulation ├───┤ calendrier │                 │ 1-1  │ 1-1  │ n-n
   └────┬────────┘   └────────────┘                 │      │      │
@@ -207,6 +208,7 @@ PostgreSQL possible en changeant l'URL).
 - **Transport** : tous les réseaux (trains, bus, tram, métro) partagent `reseau → ligne → circulation → passage → arret`.
   Les heures de passage sont en secondes depuis minuit (elles dépassent 86 400 après minuit) ; `calendrier` donne les jours de circulation.
 - **Emplacements** : tout ce qui a une position est un `lieu`, rattaché à sa gare la plus proche (`gare_proche_id`, `distance_gare_km`).
+  Pour les sites, `acces_tc` dit s'ils sont joignables depuis cette gare en transport en commun (`src/transformation/acces_tc.py`).
 - **Tracé** : `troncon_voie` contient les voies du réseau ferré national ; `trace_trajet` en déduit le tracé entre deux arrêts consécutifs.
 - **Cars** : `ligne_bus` contient les lignes de bus d'OpenStreetMap et `troncon_route` les routes entre carrefours (sans lien avec les autres tables). Un car suit sa ligne OpenStreetMap, sinon la route arrêt par arrêt, sinon une ligne droite (`lib/trace_bus.py`).
 
