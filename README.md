@@ -10,15 +10,19 @@
 
 ---
 
-Un dashboard en deux onglets, construit sur les données ouvertes (SNCF, DATAtourisme, transport.data.gouv.fr…) et l'API SNCF :
+Un dashboard en trois onglets, construit sur les données ouvertes (SNCF, DATAtourisme, transport.data.gouv.fr…) et l'API SNCF :
 
 - **Itinéraire voyageur** : de sa gare à un lieu ou un événement, les trains proposés, le tracé sur les voies, le dernier kilomètre
   (à pied, vélo, bus) et les trains qui roulent en direct sur la carte.
-- **Analyse de la couverture ferroviaire** : quels sites touristiques sont accessibles sans voiture, par département et par distance à la gare.
+- **Analyse de la couverture ferroviaire** : quels sites touristiques sont accessibles sans voiture (à pied ou en transport en commun depuis la gare),
+  par département, et où agir en priorité.
+- **Guide & Lexique** : définition des indicateurs et provenance des données.
 
 ![Onglet Itinéraire voyageur](assets/readme/itineraire.jpg)
 
 ![Onglet Analyse de la couverture ferroviaire](assets/readme/analyse.jpg)
+
+![Onglet Guide & Lexique](assets/readme/guide.jpg)
 
 ## Installation
 
@@ -42,6 +46,8 @@ source .venv/bin/activate          # Windows : .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+Pour ouvrir les notebooks de `src/EDA/` (facultatif) : `pip install -r requirements-eda.txt`.
+
 ### 4. Configurer le `.env`
 
 ```bash
@@ -56,6 +62,9 @@ Pour l'obtenir :
 2. Récupérer la clé reçue par e-mail.
 3. La coller dans le `.env` : `NAVITIA_TOKEN=votre-clé`.
 
+Facultatif : `OPENROUTER_API_KEY` ([openrouter.ai/keys](https://openrouter.ai/keys)) fait rédiger par IA la synthèse du rapport exporté
+de l'onglet Analyse. Sans clé, la synthèse est construite à partir des indicateurs.
+
 Le `.env` n'est jamais versionné : le token reste sur votre machine.
 
 ### 5. Créer la base et charger les données
@@ -66,6 +75,7 @@ python src/initialize.py
 
 Crée la base (SQLite, `data/mysncf.db`), télécharge les sources dans `data/`, puis les nettoie et les charge.
 Le premier lancement prend plusieurs dizaines de minutes. Relançable sans risque : ce qui est déjà téléchargé ou à jour n'est pas refait.
+À la fin, les données brutes de `data/` sont supprimées (environ 10 Go) : seule la base est gardée. Une nouvelle initialisation retélécharge alors les sources. Pour les garder, mettre `PURGE_DONNEES=0` dans le `.env`.
 
 ### 6. Lancer le dashboard
 
@@ -74,6 +84,30 @@ python src/app.py
 ```
 
 Puis ouvrir [http://localhost:8050](http://localhost:8050).
+
+#### Lancer avec Docker (facultatif)
+
+Il faut Docker Desktop (avec au moins 4 Go de mémoire) et le `.env` rempli.
+
+Si la base existe déjà dans `data/` :
+
+```bash
+docker compose up --build
+```
+
+Puis ouvrir [http://localhost:8050](http://localhost:8050). Le premier chargement des horaires prend un peu de temps.
+
+Sinon, construire d'abord la base (plusieurs dizaines de minutes) :
+
+```bash
+docker compose --profile init run --rm init
+```
+
+Pour arrêter :
+
+```bash
+docker compose down
+```
 
 ### 7. Lancer les tests (facultatif)
 
@@ -86,11 +120,13 @@ pytest
 ```text
 MySNCF-Experience/
 ├── src/                                            Application
-│   ├── app.py                                      Dashboard Dash : mise en page des deux onglets et callbacks
+│   ├── app.py                                      Dashboard Dash : mise en page des trois onglets et callbacks
 │   ├── initialize.py                               Point d'entrée : crée la base, télécharge les sources, lance la transformation
+│   ├── purge.py                                    Supprime les données brutes de data/ une fois la base chargée
 │   ├── assets/                                     Fichiers chargés par le navigateur
 │   │   ├── trains.js                               Animation des trains sur la carte
 │   │   ├── lecture.js                              Bouton « Écouter » (voix du navigateur) et clavier
+│   │   ├── menus.css                               Menus déroulants
 │   │   └── trains.css
 │   ├── transformation/                             Nettoyage et chargement des données dans la base (un module par domaine)
 │   │   ├── transformation.py                       Lance toutes les étapes dans l'ordre
@@ -98,7 +134,8 @@ MySNCF-Experience/
 │   │   ├── sncf.py · transilien.py · bus.py …      Horaires de tous les réseaux (trains, bus, tram)
 │   │   ├── voies.py · trace_trajets.py             Tracé des voies et des trajets
 │   │   ├── lignes_bus.py · routes.py               Lignes de bus et routes d'OpenStreetMap (tracé des cars)
-│   │   └── geo.py · lieux.py                       Outils communs
+│   │   ├── acces_tc.py                             Sites joignables en transport en commun depuis leur gare
+│   │   └── geo.py · gtfs.py · lieux.py             Outils communs
 │   └── EDA/                                        Notebooks d'analyse exploratoire
 │
 ├── lib/                                            Bibliothèques réutilisées par l'application
@@ -109,6 +146,7 @@ MySNCF-Experience/
 │   ├── analyse.py                                  Chiffres de l'onglet Analyse (indicateurs, IAF, graphes, plan d'action)
 │   ├── itineraire.py                               Logique de l'onglet Itinéraire (recherche, trajets, dernier kilomètre)
 │   ├── acheminement.py                             Gare d'une ville, gare relais (Aix → Aix TGV) et car ou voiture pour la rejoindre
+│   ├── desserte.py                                 Gares joignables depuis une gare de départ (filtre Départ de l'onglet Analyse)
 │   ├── navitia.py                                  API SNCF : gares et itinéraires
 │   ├── reseau_ferre.py                             Réseau des voies et plus court chemin
 │   ├── trace_bus.py · reseau_routier.py            Tracé d'un car sur la route de sa ligne, sinon arrêt par arrêt
@@ -121,13 +159,15 @@ MySNCF-Experience/
 │
 ├── migrations/                                     Évolutions du schéma de la base (Alembic)
 │   ├── migration.py
-│   └── versions/                                   001_schema_initial, 002_troncon_voie, 003_trace_trajet, 004_ligne_bus, 005_troncon_route…
+│   └── versions/                                   001_schema_initial … 005_troncon_route, 006_lieu_acces_tc
 │
 ├── tests/                                          Un fichier de tests par fonctionnalité (pytest)
 ├── data/                                           Sources téléchargées et base générée (non versionnées)
 ├── assets/                                         Logo, images des trains et des bus, captures du README
 ├── .env.example                                    Modèle de configuration (à copier en .env)
-└── requirements.txt                                Dépendances Python
+├── Dockerfile · docker-compose.yml                 Lancement avec Docker (facultatif)
+├── requirements.txt                                Dépendances Python
+└── requirements-eda.txt                            Dépendances des notebooks (facultatif)
 ```
 
 Le code suit une séparation stricte : `lib/` ne connaît pas Dash (testable seul), `src/app.py` ne fait que l'affichage, et chaque
@@ -148,6 +188,7 @@ PostgreSQL possible en changeant l'URL).
   │ ligne   │                                   │ lat, lon, commune      │
   └────┬────┘                                   │ gare_proche → lieu     │
        │ 1-n                                    │ distance_gare_km       │
+       │                                        │ acces_tc               │
   ┌────┴────────┐   ┌────────────┐              └──┬──────┬──────┬───────┘
   │ circulation ├───┤ calendrier │                 │ 1-1  │ 1-1  │ n-n
   └────┬────────┘   └────────────┘                 │      │      │
@@ -167,6 +208,7 @@ PostgreSQL possible en changeant l'URL).
 - **Transport** : tous les réseaux (trains, bus, tram, métro) partagent `reseau → ligne → circulation → passage → arret`.
   Les heures de passage sont en secondes depuis minuit (elles dépassent 86 400 après minuit) ; `calendrier` donne les jours de circulation.
 - **Emplacements** : tout ce qui a une position est un `lieu`, rattaché à sa gare la plus proche (`gare_proche_id`, `distance_gare_km`).
+  Pour les sites, `acces_tc` dit s'ils sont joignables depuis cette gare en transport en commun (`src/transformation/acces_tc.py`).
 - **Tracé** : `troncon_voie` contient les voies du réseau ferré national ; `trace_trajet` en déduit le tracé entre deux arrêts consécutifs.
 - **Cars** : `ligne_bus` contient les lignes de bus d'OpenStreetMap et `troncon_route` les routes entre carrefours (sans lien avec les autres tables). Un car suit sa ligne OpenStreetMap, sinon la route arrêt par arrêt, sinon une ligne droite (`lib/trace_bus.py`).
 
@@ -178,11 +220,16 @@ python migrations/migration.py --new "ajoute X"    # après avoir modifié lib/d
 ```
 
 Les migrations sont numérotées dans `migrations/versions/` (001, 002, 003…) : `--new` crée automatiquement le numéro suivant.
+Après un `git pull` qui apporte une nouvelle migration, lancer `python migrations/migration.py` sur sa base existante, puis l'étape de
+transformation qui remplit la nouvelle colonne s'il y en a une (pour 006 : `python src/transformation/acces_tc.py`, environ 5 minutes).
 Une migration existante ne se modifie jamais : toute évolution est une nouvelle migration, à relire avant de l'appliquer.
 
 ## Données
 
 ### Sources
+
+Licences : SNCF (gares, horaires, voies) et OpenStreetMap en ODbL ; DATAtourisme et Ministère de la Culture (Basilic, festivals)
+en Licence Ouverte ; réseaux urbains en Licence Ouverte ou ODbL selon le réseau.
 
 Chaque source est une variable `DATASET_<SOURCE>_URL` du `.env`, téléchargée dans `data/<source>/` (les `.zip` sont décompressés).
 Les sources chargées par `src/initialize.py` sont la liste `SOURCES` de ce fichier ; les autres sont déclarées pour la suite du projet.
@@ -208,6 +255,7 @@ python src/transformation/transformation.py   # toutes les étapes dans l'ordre 
 | `evenement.py` · `festival.py` | DATAtourisme (événements), festivals | `evenement`, `evenement_lieu`, `evenement_periode`, `lieu` |
 | `velo.py` | stationnement cyclable, Vélib', Vélo'v | `lieu` (station_velo), `station_velo` |
 | `bus.py` | 21 réseaux urbains et Île-de-France Mobilités | tables de transport |
+| `acces_tc.py` | calculé à partir des étapes précédentes | `lieu.acces_tc` (site joignable en transport en commun depuis sa gare) |
 | `voies.py` · `trace_trajets.py` | voies du réseau ferré national (SNCF Réseau) | `troncon_voie`, `trace_trajet` |
 | `lignes_bus.py` | lignes de bus d'OpenStreetMap (extrait France, 5 Go) | `ligne_bus` |
 | `routes.py` | routes d'OpenStreetMap où un car peut passer (extrait France) | `troncon_route` |
@@ -241,14 +289,27 @@ l'ajouter à `ETAPES` dans `transformation.py`. Relançable sans risque : les do
 Calculés par `lib/analyse.py`, avec les mêmes filtres pour les trois indicateurs, les trois graphes, le plan d'action et le rapport exporté.
 
 - **Sites** : culture, tourisme et événements. Les gares, arrêts et stations vélo sont des moyens d'y aller, pas des sites.
-  Un événement ne compte que s'il a une période qui croise la **Période** choisie (par défaut, les 12 prochains mois).
-- **Sites à 5 km ou moins d'une gare** : leur part et leur nombre (« accessibles sans voiture » : à pied, à vélo ou en bus).
-- **Zones blanches** : part des sites à plus de 15 km d'une gare, ou sans gare connue.
+  Un événement ne compte que s'il a une période qui croise la **Période** choisie (par défaut, l'année écoulée jusqu'à aujourd'hui).
+- **Accès depuis la gare la plus proche** (distance à vol d'oiseau) :
+  - **À pied** : site à 1,5 km ou moins de la gare.
+  - **Transport en commun** : plus loin, mais joignable depuis la gare en bus, tram, métro, TER ou car TER, avec au plus une correspondance
+    (300 m à pied au plus entre deux arrêts) et 1,5 km de marche au plus à chaque bout. Calculé une fois par `src/transformation/acces_tc.py`.
+  - **Voiture seule** (zone blanche) : aucun des deux, ou pas de gare connue. Les cars régionaux et départementaux ne sont pas en base :
+    hors des 21 agglomérations et de l'Île-de-France, cette part est surestimée.
+- **Les trois KPI** : part des sites accessibles à pied, part joignable en transport en commun, part des zones blanches (elles font 100 %).
+  Sous chaque KPI, la moyenne France (même catégorie, même période) dès qu'un filtre de lieu est actif.
 - **IAF (Indice d'Accessibilité Ferroviaire, 0-100)** : même définition que l'EDA, moyenne pondérée des sites selon leur distance
   à vol d'oiseau à la gare la plus proche (≤ 1 km = 1, 1-5 km = 0,5, 5-25 km = 0,1, au-delà = 0). La ligne « France » est calculée
-  avec les mêmes filtres, hors département et destination.
-- **Saisonnalité** : événements qui commencent chaque mois de la période, dans les départements et la destination choisis.
-- Cliquer sur un département du graphe 1 le met dans le filtre « Région / Dép. » et filtre tout l'onglet.
+  avec la même catégorie et la même période, sans les filtres de lieu.
+- **Saisonnalité** : événements qui commencent chaque mois de la période. DATAtourisme ne garde que les événements en cours ou à venir :
+  les mois passés en comptent peu.
+- **Filtres** : gare de départ (sites dont la gare la plus proche est joignable en train ou car TER depuis elle, avec au plus une
+  correspondance : `lib/desserte.py`), destination, départements, mode d'accès, période, et la catégorie choisie dans l'onglet Itinéraire.
+  Chaque filtre actif s'affiche en puce et s'enlève seul ; « Réinitialiser » les remet tous à zéro.
+- **Graphes liés** (brushing & linking) : cliquer ou encadrer des départements sur le graphe 1, cliquer un mode d'accès sur le graphe 2
+  ou un mois sur le graphe 3 filtre tout l'onglet.
+- **Accessibilité** : couleurs contrastées dans les deux thèmes (WCAG), catégories doublées d'un motif, résumé textuel de chaque graphe
+  pour les lecteurs d'écran, tous les filtres utilisables au clavier, mise en page qui se réorganise au zoom.
 - Base absente ou aucun site pour ces filtres : l'onglet affiche « — » et un message, jamais de chiffres inventés.
 
 ## Lire les horaires (trains, bus, tram…)

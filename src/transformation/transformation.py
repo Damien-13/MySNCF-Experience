@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import acces_tc
 import bus
 import culture
 import evenement
@@ -36,6 +37,7 @@ ETAPES = [
     ("festivals", festival),
     ("velo", velo),
     ("bus", bus),
+    ("accès en transport en commun", acces_tc),
     ("tracé ferroviaire", voies),
     ("tracé des trajets", trace_trajets),
     ("lignes de bus", lignes_bus),

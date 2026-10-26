@@ -80,6 +80,9 @@ class Lieu(Base):
     lon: Mapped[float | None] = mapped_column(Float)
     gare_proche_id: Mapped[int | None] = mapped_column(ForeignKey("lieu.id"), index=True)
     distance_gare_km: Mapped[float | None] = mapped_column(Float)
+    # Sites seulement : une ligne de transport en commun (bus, tram, métro, car TER…) relie la gare la plus proche au site (src/transformation/acces_tc.py).
+    # Null : pas calculé (autres types de lieux, ou étape pas encore lancée).
+    acces_tc: Mapped[bool | None] = mapped_column(Boolean)
 
 
 class Gare(Base):
