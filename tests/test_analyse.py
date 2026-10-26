@@ -51,7 +51,8 @@ def test_indicateurs_sans_stations_velo_ni_gares(engine):
     assert kpi["total"] == 7                                  # ni la gare ni la station vélo
     assert kpi["a_pied"] == 3 and kpi["part_a_pied"] == round(100 * 3 / 7, 1)   # 1,5 km ou moins
     assert kpi["part_zones_blanches"] == round(100 * 3 / 7, 1)  # 10 km et 20 km sans bus, et sans gare
-    assert kpi["part_a_pied"] + kpi["part_zones_blanches"] != 100              # le musée relié en bus n'est ni l'un ni l'autre
+    assert kpi["part_tc"] == round(100 * 1 / 7, 1)                            # le musée relié en bus
+    assert kpi["part_a_pied"] + kpi["part_tc"] + kpi["part_zones_blanches"] == pytest.approx(100, abs=0.2)
 
 
 def test_iaf_pondere_comme_l_eda_et_france_calculee(engine):
@@ -95,3 +96,18 @@ def test_plan_action_et_tranches(engine):
     assert dict(zip(acces["acces"], acces["sites"])) == {"À pied (≤ 1,5 km)": 2, "Transport en commun": 1}
     acces = analyse.modes_acces(engine, Filtres(categorie="tourisme"))
     assert dict(zip(acces["acces"], acces["sites"])) == {"Voiture seule": 3}             # dont le site sans gare
+
+
+def test_filtres_gares_de_depart_et_mode_d_acces(engine):
+    assert analyse.indicateurs(engine, Filtres(gares=[1]))["total"] == 6          # tous les sites rattachés à la gare 1 (pas l'île sans gare)
+    assert analyse.indicateurs(engine, Filtres(gares=[])) is None                  # aucune gare joignable : aucun site
+    kpi = analyse.indicateurs(engine, Filtres(acces="Transport en commun"))
+    assert kpi["total"] == 1 and kpi["part_tc"] == 100
+    _, france = analyse.iaf_departements(engine, Filtres(acces="Voiture seule", gares=[1]))
+    assert france == round(100 * 3.7 / 7, 1)                                       # la référence France ignore ces filtres
+
+
+def test_rapport_zones_blanches_et_gares_navette(engine):
+    zb = analyse.zones_blanches_departements(engine, Filtres())
+    assert zb.iloc[0].to_dict() == {"departement": "13", "sites": 6, "voiture_seule": 3}
+    assert analyse.gares_navette(engine, Filtres()).to_dict("records") == [{"gare": "Gare", "sites": 1}]    # Calanque à 10 km ; le Mont à 20 km est trop loin
